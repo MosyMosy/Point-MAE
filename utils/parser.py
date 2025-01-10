@@ -7,7 +7,8 @@ def get_args():
     parser.add_argument(
         '--config', 
         type = str, 
-        help = 'yaml config file')
+        help = 'yaml config file',
+        default = 'cfgs/pretrain.yaml')
     parser.add_argument(
         '--launcher',
         choices=['none', 'pytorch'],
@@ -28,7 +29,7 @@ def get_args():
         default=False, 
         help='whether to use sync bn')
     # some args
-    parser.add_argument('--exp_name', type = str, default='default', help = 'experiment name')
+    parser.add_argument('--exp_name', type = str, default='initial', help = 'experiment name')
     parser.add_argument('--loss', type=str, default='cd1', help='loss name')
     parser.add_argument('--start_ckpts', type = str, default=None, help = 'reload used ckpt path')
     parser.add_argument('--ckpts', type = str, default=None, help = 'test used ckpt path')
@@ -69,6 +70,19 @@ def get_args():
         '--shot', type=int, default=-1)
     parser.add_argument(
         '--fold', type=int, default=-1)
+    
+    parser.add_argument(
+        'stat_norm', 
+        action='store_true',
+        default=False,
+        help='whether to use statistical normalization')
+    
+    parser.add_argument(
+        '--sample_method',
+        type=str,
+        default='random',
+        choices=['random', 'fps'],
+        help='sampling method')  
     
     args = parser.parse_args()
 

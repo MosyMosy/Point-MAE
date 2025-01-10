@@ -7,16 +7,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 import os
 from collections import abc
-from pointnet2_ops import pointnet2_utils
+# from pointnet2_ops import pointnet2_utils
+from pytorch3d.ops import sample_farthest_points
 
 
 def fps(data, number):
-    '''
-        data B N 3
-        number int
-    '''
-    fps_idx = pointnet2_utils.furthest_point_sample(data, number)
-    fps_data = pointnet2_utils.gather_operation(data.transpose(1, 2).contiguous(), fps_idx).transpose(1, 2).contiguous()
+    """
+    data B N 3
+    number int
+    """
+    # fps_idx = pointnet2_utils.furthest_point_sample(data, number)
+    # fps_data = pointnet2_utils.gather_operation(data.transpose(1, 2).contiguous(), fps_idx).transpose(1,2).contiguous()
+
+    fps_data, _ = sample_farthest_points(points=data, K=number)
+
     return fps_data
 
 
