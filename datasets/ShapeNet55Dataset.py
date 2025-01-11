@@ -37,10 +37,8 @@ class ShapeNet(data.Dataset):
             )
             lines = test_lines + lines
 
-        self.stat_norm = config.stat_norm
-            
-        self.sample_method = config.sample_method
-
+        self.stat_norm = False
+        self.sampling_method = "random"
 
         self.file_list = []
         for line in lines:
@@ -66,10 +64,26 @@ class ShapeNet(data.Dataset):
         pc = pc / m
         return pc
 
+    def statistical_normalization(self, points, mean, std):
+        # Compute magnitudes of the vectors
+        magnitudes = torch.norm(points, dim=1, keepdim=True)  # Shape: (N, 1)
+
+        # Normalize the magnitudes
+        normalized_magnitudes = (magnitudes - mean) / std  # Shape: (N, 1)
+
+        # Rescale points using normalized magnitudes
+        unit_vectors = points / (magnitudes + 1e-8)  # Unit vectors, Shape: (N, 3)
+        normalized_points = (
+            unit_vectors * normalized_magnitudes
+        )  # Rescaled points, Shape: (N, 3)
+
+        return normalized_points
+
     def random_sample(self, pc, num):
-        torch.random.shuffle(self.permutation)
-        pc = pc[self.permutation[:num]]
-        return pc
+        # Generate a random permutation of indices
+        indices = torch.randperm(pc.size(0))[:num]
+        # Select the sampled points
+        return pc[indices]
 
     def __getitem__(self, idx):
         sample = self.file_list[idx]
@@ -78,18 +92,36 @@ class ShapeNet(data.Dataset):
             np.float32
         )
         data = self.pc_to_tensor(data)
-        if self.sample_method == "random":
-            data = self.random_sample(data, self.sample_points_num) # random sample
-        elif self.sample_method == "fps":
-            data = fps(data.unsqueeze(0), self.sample_points_num)[0] # fps sample
-                    
+        if (
+            self.sampling_method == "random"
+        ):  # the fps sampling is done in the collate_fn
+            data = self.random_sample(data, self.sample_points_num)  # random sample
+            mean = 0.5335
+            std = 0.2276
+        elif self.sampling_method == "fps":
+            mean = 0.5330
+            std = 0.2271
+
         if self.stat_norm:
-            data = (data - 0.5335) / 0.2276
-        
+            data = self.statistical_normalization(data, mean, std)
+
         return sample["taxonomy_id"], sample["model_id"], data
 
     def __len__(self):
         return len(self.file_list)
+
+    # def collate_fn(self, batch):
+    #     taxonomy_ids, model_ids, data = [], [], []
+    #     for item in batch:
+    #         taxonomy_ids.append(item[0])
+    #         model_ids.append(item[1])
+    #         data.append(item[2])
+    #     data = torch.stack(data, dim=0)
+    #     if self.sample_method == "fps":
+    #         data = fps(data, self.sample_points_num)  # fps sample
+    #         print(self.sample_method)
+
+    #     return taxonomy_ids, model_ids, data
 
     # mean = 0.5335
     # std = 0.2276

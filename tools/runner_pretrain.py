@@ -120,6 +120,8 @@ def run_net(args, config, train_writer=None, val_writer=None):
             dataset_name = config.dataset.train._base_.NAME
             if dataset_name == 'ShapeNet':
                 points = data.cuda()
+                if args.sampling_method == 'fps':
+                    points = misc.fps(points, npoints)
             elif dataset_name == 'ModelNet':
                 points = data[0].cuda()
                 points = misc.fps(points, npoints)   
