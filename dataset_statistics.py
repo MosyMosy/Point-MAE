@@ -11,12 +11,12 @@ if __name__ == "__main__":
                 "PC_PATH": "/export/datasets/public/Point_Cloud_Processing/data/ShapeNet55-34/shapenet_pc",
                 "subset": "train",
                 "N_POINTS": 8192,
-                "npoints": 1024,
-                "sample_method": "fps",
-                "stat_norm": False,
+                "npoints": 1024
             }
         )
     )
+    shapenet_ds.sampling_method = "fps"
+    shapenet_ds.stat_norm = False
 
     all_radii = []
     for i in tq(range(len(shapenet_ds))):

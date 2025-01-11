@@ -96,14 +96,9 @@ class ShapeNet(data.Dataset):
             self.sampling_method == "random"
         ):  # the fps sampling is done in the collate_fn
             data = self.random_sample(data, self.sample_points_num)  # random sample
-            mean = 0.5335
-            std = 0.2276
-        elif self.sampling_method == "fps":
-            mean = 0.5330
-            std = 0.2271
 
         if self.stat_norm:
-            data = self.statistical_normalization(data, mean, std)
+            data = self.statistical_normalization(data, mean=5302, std=2267)
 
         return sample["taxonomy_id"], sample["model_id"], data
 
