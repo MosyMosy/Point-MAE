@@ -20,6 +20,8 @@ from pytorch3d.ops import knn_points
 from pytorch3d.loss import chamfer_distance
 from functools import partial
 
+from utils import misc
+
 
 class ChamferDistanceL1(torch.nn.Module):
     def __init__(self):
@@ -92,7 +94,7 @@ class Group(nn.Module):  # FPS + KNN
         center = misc.fps(xyz, self.num_group)  # B G 3
         # knn to get the neighborhood
         # _, idx = self.knn(xyz, center) # B G M
-        idx = knn_points( center, xyz,K=self.group_size)[1]
+        idx = knn_points(center, xyz, K=self.group_size)[1]
         assert idx.size(1) == self.num_group
         assert idx.size(2) == self.group_size
         idx_base = (
@@ -351,6 +353,7 @@ class MaskTransformer(nn.Module):
 
         self.norm = nn.LayerNorm(self.trans_dim)
         self.apply(self._init_weights)
+        self.pose_encode_mode = ""
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -437,7 +440,14 @@ class MaskTransformer(nn.Module):
         # add pos embedding
         # mask pos center
         masked_center = center[~bool_masked_pos].reshape(batch_size, -1, 3)
-        pos = self.pos_embed(masked_center)
+
+        if self.pose_encode_mode == "polar":
+            pos = misc.compute_polar_pose_embed(embed_dim=C, points=masked_center)
+        elif self.pose_encode_mode == "center_polar":
+            pos = self.pos_embed(masked_center)
+            pos += misc.compute_polar_pose_embed(embed_dim=C, points=masked_center)
+        else:
+            pos = self.pos_embed(masked_center)
 
         # transformer
         x_vis = self.blocks(x_vis, pos)
@@ -492,6 +502,7 @@ class Point_MAE(nn.Module):
         self.loss = config.loss
         # loss
         self.build_loss_func(self.loss)
+        self.pose_encode_mode = ""
 
     def build_loss_func(self, loss_type):
         if loss_type == "cdl1":
@@ -509,8 +520,15 @@ class Point_MAE(nn.Module):
         B, _, C = x_vis.shape  # B VIS C
 
         pos_emd_vis = self.decoder_pos_embed(center[~mask]).reshape(B, -1, C)
-
         pos_emd_mask = self.decoder_pos_embed(center[mask]).reshape(B, -1, C)
+
+        if self.pose_encode_mode in ["polar", "center_polar"]:
+            pos_emd_vis += misc.compute_polar_pose_embed(
+                embed_dim=C, points=center[~mask].reshape(B, -1, 3)
+            )
+            pos_emd_mask += misc.compute_polar_pose_embed(
+                embed_dim=C, points=center[mask].reshape(B, -1, 3)
+            )
 
         _, N, _ = pos_emd_mask.shape
         mask_token = self.mask_token.expand(B, N, -1)

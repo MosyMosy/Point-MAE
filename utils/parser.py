@@ -72,6 +72,13 @@ def get_args():
         default=False,
         help="whether to use statistical normalization",
     )
+    parser.add_argument(
+        "--pose_encode_mode",
+        type=str,
+        default="center",
+        choices=["center", "polar", "center_polar"],
+        help="pose encode mode",
+    )
 
     parser.add_argument(
         "--sampling_method",

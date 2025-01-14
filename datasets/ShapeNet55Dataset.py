@@ -5,7 +5,7 @@ import torch.utils.data as data
 from .io import IO
 from .build import DATASETS
 from utils.logger import *
-from utils.misc import fps
+from utils.misc import fps, pc_to_tensor, pc_scale
 
 
 @DATASETS.register_module()
@@ -37,7 +37,6 @@ class ShapeNet(data.Dataset):
             )
             lines = test_lines + lines
 
-        self.stat_norm = False
         self.sampling_method = "random"
 
         self.file_list = []
@@ -55,30 +54,7 @@ class ShapeNet(data.Dataset):
 
         self.permutation = np.arange(self.npoints)
 
-    def pc_to_tensor(self, pc):
-        """pc: NxC, return NxC"""
-        pc = torch.from_numpy(pc).float()
-        centroid = torch.mean(pc, dim=0)
-        pc = pc - centroid
-        m = torch.max(torch.sqrt(torch.sum(pc**2, dim=1)))
-        pc = pc / m
-        return pc
-
-    def statistical_normalization(self, points, mean, std):
-        # Compute magnitudes of the vectors
-        magnitudes = torch.norm(points, dim=1, keepdim=True)  # Shape: (N, 1)
-
-        # Normalize the magnitudes
-        normalized_magnitudes = (magnitudes - mean) / std  # Shape: (N, 1)
-
-        # Rescale points using normalized magnitudes
-        unit_vectors = points / (magnitudes + 1e-8)  # Unit vectors, Shape: (N, 3)
-        normalized_points = (
-            unit_vectors * normalized_magnitudes
-        )  # Rescaled points, Shape: (N, 3)
-
-        return normalized_points
-
+    
     def random_sample(self, pc, num):
         # Generate a random permutation of indices
         indices = torch.randperm(pc.size(0))[:num]
@@ -91,14 +67,13 @@ class ShapeNet(data.Dataset):
         data = IO.get(os.path.join(self.pc_path, sample["file_path"])).astype(
             np.float32
         )
-        data = self.pc_to_tensor(data)
+        data = pc_to_tensor(data)
         if (
             self.sampling_method == "random"
         ):  # the fps sampling is done in the collate_fn
             data = self.random_sample(data, self.sample_points_num)  # random sample
-
-        if self.stat_norm:
-            data = self.statistical_normalization(data, mean=5302, std=2267)
+            
+        data = pc_scale(data, range=(-1, 1))
 
         return sample["taxonomy_id"], sample["model_id"], data
 

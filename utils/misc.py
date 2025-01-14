@@ -7,6 +7,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import os
 from collections import abc
+
+from pytorch3d.transforms.rotation_conversions import (
+    euler_angles_to_matrix,
+    matrix_to_euler_angles,
+    matrix_to_rotation_6d,
+    rotation_6d_to_matrix,
+)
+
 # from pointnet2_ops import pointnet2_utils
 from pytorch3d.ops import sample_farthest_points
 
@@ -275,3 +283,294 @@ def random_dropping(pc, e):
 def random_scale(partial, scale_range=[0.8, 1.2]):
     scale = torch.rand(1).cuda() * (scale_range[1] - scale_range[0]) + scale_range[0]
     return partial * scale
+
+
+def radius_normalization(pc, mean=0.5302, std=0.2267):
+    # Compute radius of the vectors
+    # centroid = torch.mean(pc, dim=1, keepdim=True)
+    # pc = pc - centroid
+    radius = torch.sqrt(torch.sum(pc**2, dim=-1, keepdim=True))  # Shape: (..., 1)
+
+    radius_mean = radius.mean(dim=-1)
+    radius_std = radius.std(dim=-1)
+
+    # Normalize the radius
+    normalized_radius = (radius - mean) / std  # Shape: (N, 1)
+
+    # Adjust points to reflect normalized radius
+    normalized_points = pc * (normalized_radius / (radius + 1e-6)) - torch.tensor(
+        [[[mean, mean, mean]]], device=pc.device
+    )
+
+    return normalized_points
+
+
+def inverse_radius_normalization(normalized_points, mean=0.5302, std=0.2267):
+    # Compute the normalized radius of the vectors
+    normalized_radius = torch.sqrt(
+        torch.sum(normalized_points**2, dim=-1, keepdim=True)
+    )  # Shape: (N, 1)
+
+    # Reverse the normalization of the radius
+    original_radius = normalized_radius * std + mean  # Shape: (N, 1)
+
+    # Adjust points to reflect the original radius
+    original_points = normalized_points * (
+        original_radius / normalized_radius
+    )  # Broadcasting happens correctly
+
+    return original_points
+
+
+def pc_scale(pc, range=(-1, 1)):
+    """pc: NxC, return NxC"""
+    # assert len(pc.shape) == 3, "The shape of the point cloud should be 3."
+    range_center = (range[1] + range[0]) / 2
+    range_radius = (range[1] - range[0]) / 2
+    centroid = torch.mean(pc, dim=-2, keepdim=True)
+    pc = pc - centroid
+    m = torch.max(torch.sqrt(torch.sum(pc**2, dim=-1)), dim=-1, keepdim=True)[0]
+    pc = ((pc / m) * range_radius) + range_center
+    return pc
+
+
+def pc_to_tensor(pc):
+    """pc: NxC, return NxC"""
+    pc = torch.from_numpy(pc).float()
+    return pc
+
+
+def normalize_xyz(
+    pc: torch.tensor, mean: list = [0, 0, 0], std: list = [0.356, 0.3052, 0.3358]
+):
+    assert pc.shape[-1] == 3, "The last dimension of the point cloud should be 3."
+    mean = torch.tensor(mean, device=pc.device).expand_as(pc)
+    std = torch.tensor(std, device=pc.device).expand_as(pc)
+    torch.tensor([[[0.356, 0.3052, 0.3358]]])
+    return (pc - mean) / std
+
+
+# code is copied from MAE
+def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
+    """
+    embed_dim: Output dimension for each position (must be even).
+    pos: A tensor of positions to be encoded, shape (B, N).
+    Returns:
+    A tensor of positional embeddings with shape (B, N, embed_dim).
+    """
+    assert embed_dim % 2 == 0, "Embedding dimension must be even."
+
+    omega = torch.arange(embed_dim // 2, dtype=torch.float32, device=pos.device)
+    omega /= embed_dim / 2.0
+    omega = 1.0 / (10000**omega)  # (D/2,)
+
+    out = pos.unsqueeze(-1) * omega  # (B, N, D/2)
+
+    emb_sin = torch.sin(out)  # (B, N, D/2)
+    emb_cos = torch.cos(out)  # (B, N, D/2)
+
+    emb = torch.cat([emb_sin, emb_cos], dim=-1)  # (B, N, D)
+    return emb
+
+
+def get_3d_sincos_pos_embed(embed_dim, points):
+    """
+    embed_dim: Output embedding dimension (must be divisible by 3).
+    points: A tensor of 3D positions, shape (B, N, 3).
+    Returns:
+    A tensor of positional embeddings with shape (B, N, embed_dim).
+    """
+    assert embed_dim % 3 == 0, "Embedding dimension must be divisible by 3."
+    assert points.shape[-1] == 3, "Input points must have shape (B, N, 3)."
+
+    # Split the embedding dimension equally among X, Y, and Z
+    dim_per_axis = embed_dim // 3
+
+    # Extract X, Y, Z coordinates
+    x_embed = get_1d_sincos_pos_embed_from_grid(
+        dim_per_axis, points[..., 0]
+    )  # (B, N, dim_per_axis)
+    y_embed = get_1d_sincos_pos_embed_from_grid(
+        dim_per_axis, points[..., 1]
+    )  # (B, N, dim_per_axis)
+    z_embed = get_1d_sincos_pos_embed_from_grid(
+        dim_per_axis, points[..., 2]
+    )  # (B, N, dim_per_axis)
+
+    # Concatenate embeddings along the last dimension
+    pos_embed = torch.cat([x_embed, y_embed, z_embed], dim=-1)  # (B, N, embed_dim)
+    return pos_embed
+
+
+def compute_angles_to_axes(points):
+    """
+    Compute angles between each point vector and the X, Y, Z axes.
+
+    Args:
+        points: Tensor of shape (B, N, 3), where B is batch size, N is number of points,
+                and 3 corresponds to (x, y, z) coordinates.
+
+    Returns:
+        angles: Tensor of shape (B, N, 3), where the last dimension corresponds to
+                angles with the X, Y, and Z axes (in radians).
+    """
+    # Compute the norm of each point vector: (B, N)
+    norms = torch.linalg.norm(points, dim=-1, keepdim=True)  # (B, N, 1)
+
+    # Normalize points to unit vectors to avoid dividing by zero
+    norms = torch.clamp(norms, min=1e-8)  # Avoid division by zero
+
+    # Compute the cosine of angles with each axis
+    cos_angles = points / norms  # (B, N, 3)
+
+    # Compute the angles in radians
+    angles = torch.acos(cos_angles)  # (B, N, 3)
+
+    return angles
+
+
+def compute_polar_pose_embed(embed_dim, points):
+    polar_points = compute_angles_to_axes(points)
+    polar_embed = get_3d_sincos_pos_embed(embed_dim, polar_points)
+    return polar_embed
+
+
+def compute_polar_coordinates(pc):
+    """
+    Convert a batch of 3D points to polar coordinates (radius, azimuth, polar angle).
+
+    Args:
+        point_cloud (torch.Tensor): Tensor of shape (B, N, 3), where
+                                     B is the batch size,
+                                     N is the number of points,
+                                     3 corresponds to (x, y, z) coordinates.
+
+    Returns:
+        torch.Tensor: Polar coordinates tensor of shape (B, N, 3), where
+                      the last dimension represents (radius, azimuth, polar_angle).
+    """
+    # Extract x, y, z coordinates
+    x = pc[..., 0]
+    y = pc[..., 1]
+    z = pc[..., 2]
+
+    # Compute radius
+    radius = torch.sqrt(x**2 + y**2 + z**2)
+
+    # Compute azimuth (theta): atan2(y, x)
+    azimuth = torch.atan2(y, x)
+
+    # Compute polar angle (phi): acos(z / r)
+    polar_angle = torch.acos(
+        torch.clamp(z / radius, min=-1.0, max=1.0)
+    )  # Clamp to avoid numerical issues
+
+    # Combine into a single tensor
+    polar_coordinates = torch.stack((radius, azimuth, polar_angle), dim=-1)
+
+    return polar_coordinates
+
+
+def point_to_euler_radius(pc):
+    """
+    Compute the Euler angles (yaw, pitch, roll) for each point in a batch of point clouds.
+
+    Args:
+        point_cloud (torch.Tensor): Tensor of shape (B, N, 3), where
+                                     B is the batch size,
+                                     N is the number of points,
+                                     3 corresponds to (x, y, z) coordinates.
+
+    Returns:
+        torch.Tensor: Euler angles tensor of shape (B, N, 3), where
+                      the last dimension represents (yaw, pitch, roll).
+    """
+    # Extract x, y, z coordinates
+    x = pc[..., 0]
+    y = pc[..., 1]
+    z = pc[..., 2]
+
+    # Compute yaw (azimuth): atan2(y, x)
+    yaw = torch.atan2(y, x)
+
+    # Compute pitch (elevation): atan2(z, sqrt(x^2 + y^2))
+    pitch = torch.atan2(z, torch.sqrt(x**2 + y**2))
+
+    # Set roll to 0 (undefined for individual points)
+    roll = torch.zeros_like(yaw)
+
+    # Combine yaw, pitch, and roll into a single tensor
+    euler_angles = torch.stack((yaw, pitch, roll), dim=-1)
+    
+    radius = torch.sqrt(torch.sum(pc**2, dim=-1, keepdim=True))
+
+    return euler_angles, radius
+
+
+def euler_radius_to_point(euler_angles, radius):
+    """
+    Convert Euler angles and radius to XYZ coordinates.
+
+    Args:
+        euler_angles (torch.Tensor): Tensor of shape (B, N, 3) containing yaw, pitch, and roll.
+        radius (torch.Tensor): Tensor of shape (B, N, 1) containing the radius for each point.
+
+    Returns:
+        torch.Tensor: Tensor of shape (B, N, 3) with reconstructed XYZ coordinates.
+    """
+    # Extract yaw and pitch
+    yaw = euler_angles[..., 0]  # Rotation around Z-axis
+    pitch = euler_angles[..., 1]  # Elevation from X-Y plane
+
+    # Compute direction vector from yaw and pitch
+    x = torch.cos(pitch) * torch.cos(yaw)
+    y = torch.cos(pitch) * torch.sin(yaw)
+    z = torch.sin(pitch)
+
+    # Combine into direction vector
+    direction_vector = torch.stack((x, y, z), dim=-1)  # (B, N, 3)
+
+    # Scale the direction vector by the radius to compute XYZ
+    xyz = radius * direction_vector  # (B, N, 3)
+
+    return xyz
+
+
+def point_xyz_to_7D(pc: torch.tensor):
+    assert pc.shape[-1] == 3, "The last dimension of the point cloud should be 3."
+    assert len(pc.shape) == 3, "The shape of the point cloud should be 3."
+
+    euler, radius = point_to_euler_radius(pc)
+    matrix_rotation = euler_angles_to_matrix(euler, convention="ZYX")
+    rotation_6d = matrix_to_rotation_6d(matrix_rotation)
+
+    return torch.cat([radius, rotation_6d], dim=-1)
+
+
+def point_7D_to_xyz(pc_7d):
+    """
+    Convert a 7D point cloud representation back to 3D XYZ coordinates.
+
+    Args:
+        pc_7d (torch.Tensor): Tensor of shape (B, N, 7) containing:
+                              - 3 original XYZ (optional, ignored in reconstruction),
+                              - 1 radius,
+                              - 6D rotation representation.
+
+    Returns:
+        torch.Tensor: Tensor of shape (B, N, 3) with reconstructed XYZ coordinates.
+    """
+    assert pc_7d.shape[-1] == 7, "Expected input shape (B, N, 7)."
+
+    # Extract radius and 6D rotation representation
+    radius = pc_7d[..., 0:1]  # (B, N, 1)
+    rotation_6d = pc_7d[..., 1:]  # (B, N, 6)
+
+    # Convert 6D rotation to rotation matrices
+    rotation_matrix = rotation_6d_to_matrix(rotation_6d)  # (B, N, 3, 3)
+
+    euler = matrix_to_euler_angles(rotation_matrix, convention="ZYX")  # (B, N, 3)
+
+    xyz = euler_radius_to_point(euler, radius)
+
+    return xyz

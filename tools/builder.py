@@ -20,8 +20,6 @@ def dataset_builder(args, config):
     dataset = build_dataset_from_cfg(config._base_, config.others)
     if hasattr(dataset, "sampling_method"):
         dataset.sampling_method = args.sampling_method
-    if hasattr(dataset, "stat_norm"):
-        dataset.stat_norm = args.stat_norm
     shuffle = config.others.subset == "train"
     if args.distributed:
         sampler = torch.utils.data.distributed.DistributedSampler(
