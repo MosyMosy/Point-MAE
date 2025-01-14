@@ -1,4 +1,6 @@
 NAME: ShapeNet
 DATA_PATH: /export/datasets/public/Point_Cloud_Processing/data/ShapeNet55-34/ShapeNet-55
+# DATA_PATH: /projets/moslem/ShapeNet55-34/ShapeNet-55
 N_POINTS: 8192
 PC_PATH: /export/datasets/public/Point_Cloud_Processing/data/ShapeNet55-34/shapenet_pc
+# PC_PATH: /projets/moslem/ShapeNet55-34/shapenet_pc

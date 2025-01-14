@@ -26,6 +26,9 @@ train_transforms = transforms.Compose(
     ]
 )
 
+scaler = torch.cuda.amp.GradScaler()
+from sklearn.svm import SVC
+
 
 class Acc_Metric:
     def __init__(self, acc=0.0):
@@ -46,9 +49,18 @@ class Acc_Metric:
         return _dict
 
 
+# def evaluate_svm(train_features, train_labels, test_features, test_labels):
+#     clf = LinearSVC()
+#     clf.fit(train_features, train_labels)
+#     pred = clf.predict(test_features)
+#     return np.sum(test_labels == pred) * 1.0 / pred.shape[0]
+# Ali
 def evaluate_svm(train_features, train_labels, test_features, test_labels):
-    clf = LinearSVC()
+    # clf = LinearSVC()
+    clf = SVC(C=0.01, kernel="linear")
+    train_features = train_features.mean(1) + train_features.max(1)
     clf.fit(train_features, train_labels)
+    test_features = test_features.mean(1) + test_features.max(1)
     pred = clf.predict(test_features)
     return np.sum(test_labels == pred) * 1.0 / pred.shape[0]
 
@@ -63,24 +75,27 @@ def run_net(args, config, train_writer=None, val_writer=None):
         builder.dataset_builder(args, config.dataset.train),
         builder.dataset_builder(args, config.dataset.val),
     )
-    (_, extra_train_dataloader) = (
-        builder.dataset_builder(args, config.dataset.extra_train)
-        if config.dataset.get("extra_train")
-        else (None, None)
+    config.dataset.extra_train_svm.others.bs = config.total_bs * 2
+    config.dataset.extra_test_svm.others.bs = config.total_bs * 2
+    (
+        (_, extra_train_dataloader),
+        (_, extra_test_dataloader),
+    ) = (
+        builder.dataset_builder(args, config.dataset.extra_train_svm),
+        builder.dataset_builder(args, config.dataset.extra_test_svm),
     )
     # build model
     base_model = builder.model_builder(config.model)
 
     if args.use_gpu:
         base_model.to(args.local_rank)
-        
+
     if hasattr(base_model, "pose_encode_mode"):
         base_model.pose_encode_mode = args.pose_encode_mode
 
     if hasattr(base_model, "MAE_encoder"):
         if hasattr(base_model.MAE_encoder, "pose_encode_mode"):
             base_model.MAE_encoder.pose_encode_mode = args.pose_encode_mode
-    
 
     # from IPython import embed; embed()
 
@@ -157,19 +172,22 @@ def run_net(args, config, train_writer=None, val_writer=None):
 
             assert points.size(1) == npoints
             points = train_transforms(points)
-            loss = base_model(points)
+            with torch.cuda.amp.autocast():
+                loss = base_model(points)
+
             try:
-                loss.backward()
+                scaler.scale(loss).backward()
                 # print("Using one GPU")
             except:
                 loss = loss.mean()
-                loss.backward()
+                scaler.scale(loss).backward()
                 # print("Using multi GPUs")
 
             # forward
             if num_iter == config.step_per_update:
                 num_iter = 0
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 base_model.zero_grad()
 
             if args.distributed:
@@ -205,6 +223,7 @@ def run_net(args, config, train_writer=None, val_writer=None):
                     ),
                     logger=logger,
                 )
+
         if isinstance(scheduler, list):
             for item in scheduler:
                 item.step(epoch)
@@ -225,14 +244,14 @@ def run_net(args, config, train_writer=None, val_writer=None):
             logger=logger,
         )
 
-        # if epoch % args.val_freq == 0 and epoch != 0:
-        #     # Validate the current model
-        #     metrics = validate(base_model, extra_train_dataloader, test_dataloader, epoch, val_writer, args, config, logger=logger)
-        #
-        #     # Save ckeckpoints
-        #     if metrics.better_than(best_metrics):
-        #         best_metrics = metrics
-        #         builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-best', args, logger = logger)
+        if epoch % args.val_freq == 0 and epoch != 0:
+            # Validate the current model
+            metrics = validate(base_model, extra_train_dataloader, extra_test_dataloader, epoch, val_writer, args, config, logger=logger)
+        
+            # Save ckeckpoints
+            if metrics.better_than(best_metrics):
+                best_metrics = metrics
+                builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-best', args, logger = logger)
         builder.save_checkpoint(
             base_model,
             optimizer,
@@ -285,7 +304,7 @@ def validate(
         for idx, (taxonomy_ids, model_ids, data) in enumerate(extra_train_dataloader):
             points = data[0].cuda()
             label = data[1].cuda()
-
+            
             points = misc.fps(points, npoints)
 
             assert points.size(1) == npoints
@@ -298,6 +317,7 @@ def validate(
         for idx, (taxonomy_ids, model_ids, data) in enumerate(test_dataloader):
             points = data[0].cuda()
             label = data[1].cuda()
+            
 
             points = misc.fps(points, npoints)
             assert points.size(1) == npoints

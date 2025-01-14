@@ -473,17 +473,13 @@ def compute_polar_coordinates(pc):
 
 def point_to_euler_radius(pc):
     """
-    Compute the Euler angles (yaw, pitch, roll) for each point in a batch of point clouds.
+    Compute the Euler angles (yaw, pitch, roll) and radius for each point in a batch of point clouds.
 
     Args:
-        point_cloud (torch.Tensor): Tensor of shape (B, N, 3), where
-                                     B is the batch size,
-                                     N is the number of points,
-                                     3 corresponds to (x, y, z) coordinates.
+        pc (torch.Tensor): Tensor of shape (B, N, 3) with (x, y, z) coordinates.
 
     Returns:
-        torch.Tensor: Euler angles tensor of shape (B, N, 3), where
-                      the last dimension represents (yaw, pitch, roll).
+        Tuple[torch.Tensor, torch.Tensor]: Euler angles of shape (B, N, 3) and radius of shape (B, N, 1).
     """
     # Extract x, y, z coordinates
     x = pc[..., 0]
@@ -494,15 +490,16 @@ def point_to_euler_radius(pc):
     yaw = torch.atan2(y, x)
 
     # Compute pitch (elevation): atan2(z, sqrt(x^2 + y^2))
-    pitch = torch.atan2(z, torch.sqrt(x**2 + y**2))
+    pitch = torch.atan2(z, torch.sqrt(x**2 + y**2 + 1e-7))
 
     # Set roll to 0 (undefined for individual points)
     roll = torch.zeros_like(yaw)
 
     # Combine yaw, pitch, and roll into a single tensor
     euler_angles = torch.stack((yaw, pitch, roll), dim=-1)
-    
-    radius = torch.sqrt(torch.sum(pc**2, dim=-1, keepdim=True))
+
+    # Compute radius: sqrt(x^2 + y^2 + z^2)
+    radius = torch.sqrt(torch.sum(pc**2, dim=-1, keepdim=True) + 1e-7)
 
     return euler_angles, radius
 
@@ -512,35 +509,59 @@ def euler_radius_to_point(euler_angles, radius):
     Convert Euler angles and radius to XYZ coordinates.
 
     Args:
-        euler_angles (torch.Tensor): Tensor of shape (B, N, 3) containing yaw, pitch, and roll.
-        radius (torch.Tensor): Tensor of shape (B, N, 1) containing the radius for each point.
+        euler_angles (torch.Tensor): Tensor of shape (B, N, 3) with yaw, pitch, and roll.
+        radius (torch.Tensor): Tensor of shape (B, N, 1) with radius values.
 
     Returns:
         torch.Tensor: Tensor of shape (B, N, 3) with reconstructed XYZ coordinates.
     """
     # Extract yaw and pitch
-    yaw = euler_angles[..., 0]  # Rotation around Z-axis
-    pitch = euler_angles[..., 1]  # Elevation from X-Y plane
+    yaw = euler_angles[..., 0]
+    pitch = euler_angles[..., 1]
+
+    # Debug Euler angles
+    assert not torch.isnan(yaw).any(), "NaN in yaw!"
+    assert not torch.isnan(pitch).any(), "NaN in pitch!"
 
     # Compute direction vector from yaw and pitch
     x = torch.cos(pitch) * torch.cos(yaw)
     y = torch.cos(pitch) * torch.sin(yaw)
     z = torch.sin(pitch)
 
-    # Combine into direction vector
     direction_vector = torch.stack((x, y, z), dim=-1)  # (B, N, 3)
 
-    # Scale the direction vector by the radius to compute XYZ
-    xyz = radius * direction_vector  # (B, N, 3)
+    # Debug direction vector
+    assert not torch.isnan(direction_vector).any(), "NaN in direction vector!"
+
+    # Clamp radius to avoid instability
+    radius = torch.clamp(radius, min=1e-7, max=1e3)
+
+    # Scale direction vector by radius
+    xyz = radius * direction_vector
+
+    # Debug final output
+    assert not torch.isnan(xyz).any(), "NaN in reconstructed XYZ!"
 
     return xyz
 
 
-def point_xyz_to_7D(pc: torch.tensor):
+
+def point_xyz_to_7D(pc):
+    """
+    Convert a 3D point cloud to a 7D representation (radius + 6D rotation).
+
+    Args:
+        pc (torch.Tensor): Tensor of shape (B, N, 3) with (x, y, z) coordinates.
+
+    Returns:
+        torch.Tensor: Tensor of shape (B, N, 7) with 1 radius and 6D rotation.
+    """
     assert pc.shape[-1] == 3, "The last dimension of the point cloud should be 3."
-    assert len(pc.shape) == 3, "The shape of the point cloud should be 3."
+    assert len(pc.shape) == 3, "The input point cloud should have 3 dimensions (B, N, 3)."
 
     euler, radius = point_to_euler_radius(pc)
+
+    # Convert Euler angles to rotation matrix and then to 6D representation
     matrix_rotation = euler_angles_to_matrix(euler, convention="ZYX")
     rotation_6d = matrix_to_rotation_6d(matrix_rotation)
 
@@ -552,10 +573,7 @@ def point_7D_to_xyz(pc_7d):
     Convert a 7D point cloud representation back to 3D XYZ coordinates.
 
     Args:
-        pc_7d (torch.Tensor): Tensor of shape (B, N, 7) containing:
-                              - 3 original XYZ (optional, ignored in reconstruction),
-                              - 1 radius,
-                              - 6D rotation representation.
+        pc_7d (torch.Tensor): Tensor of shape (B, N, 7) containing radius and 6D rotation.
 
     Returns:
         torch.Tensor: Tensor of shape (B, N, 3) with reconstructed XYZ coordinates.
@@ -566,11 +584,61 @@ def point_7D_to_xyz(pc_7d):
     radius = pc_7d[..., 0:1]  # (B, N, 1)
     rotation_6d = pc_7d[..., 1:]  # (B, N, 6)
 
-    # Convert 6D rotation to rotation matrices
+    # Convert 6D rotation to rotation matrix
     rotation_matrix = rotation_6d_to_matrix(rotation_6d)  # (B, N, 3, 3)
 
+    # Debug rotation matrix
+    assert not torch.isnan(rotation_matrix).any(), "NaN in rotation matrix!"
+    assert torch.allclose(
+        torch.det(rotation_matrix), torch.ones_like(torch.det(rotation_matrix)), atol=1e-6
+    ), "Invalid rotation matrix!"
+
+    # Convert rotation matrix to Euler angles
     euler = matrix_to_euler_angles(rotation_matrix, convention="ZYX")  # (B, N, 3)
 
+    # Debug Euler angles
+    assert not torch.isnan(euler).any(), "NaN in Euler angles!"
+
+    # Reconstruct XYZ coordinates
     xyz = euler_radius_to_point(euler, radius)
 
     return xyz
+
+
+def chamfer_loss_7d(p, q, weight_radius=1.0, weight_rotation=1.0):
+    """
+    Compute Chamfer Loss for 7D point cloud representation.
+
+    Args:
+        p (torch.Tensor): Tensor of shape (B, N, 7), the predicted point cloud.
+        q (torch.Tensor): Tensor of shape (B, M, 7), the target point cloud.
+        weight_radius (float): Weight for the radius component.
+        weight_rotation (float): Weight for the rotation component.
+
+    Returns:
+        torch.Tensor: Chamfer Loss (scalar).
+    """
+    assert p.shape[-1] == 7 and q.shape[-1] == 7, "Input tensors must have 7D features."
+
+    # Separate radius and rotation components
+    radius_p, rotation_p = p[..., :1], p[..., 1:]
+    radius_q, rotation_q = q[..., :1], q[..., 1:]
+
+    # Pairwise distances for radius
+    dist_radius = torch.cdist(radius_p, radius_q) ** 2
+
+    # Pairwise distances for rotation (6D vectors)
+    dist_rotation = torch.cdist(rotation_p, rotation_q) ** 2
+
+    # Combined distance
+    dist_combined = weight_radius * dist_radius + weight_rotation * dist_rotation
+
+    # Forward Chamfer Loss: For each point in p, find the closest point in q
+    loss_p_to_q = torch.mean(torch.min(dist_combined, dim=-1)[0])
+
+    # Backward Chamfer Loss: For each point in q, find the closest point in p
+    loss_q_to_p = torch.mean(torch.min(dist_combined.transpose(1, 2), dim=-1)[0])
+
+    # Final Chamfer Loss
+    loss = loss_p_to_q + loss_q_to_p
+    return loss
