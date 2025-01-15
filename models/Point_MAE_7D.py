@@ -303,6 +303,8 @@ class Point_MAE_7D(nn.Module):
         # loss
         self.build_loss_func(self.loss)
 
+        self.normalize = config.normalize
+
     def build_loss_func(self, loss_type):
         if loss_type == "cdl1":
             self.loss_func = ChamferDistanceL1().cuda()
@@ -318,8 +320,14 @@ class Point_MAE_7D(nn.Module):
         # 3D > 7D
         neighborhood_7D = misc.point_xyz_to_7D(
             neighborhood.reshape(B * self.num_group, -1, 3)
-        ).reshape(B, self.num_group, -1, 7)
+        )
         center_7D = misc.point_xyz_to_7D(center)
+
+        if self.normalize:
+            neighborhood_7D = misc.normalize_7D(neighborhood_7D)
+            center_7D = misc.normalize_7D(center_7D)
+
+        neighborhood_7D = neighborhood_7D.reshape(B, self.num_group, -1, 7)
 
         x_vis, mask = self.MAE_encoder(neighborhood_7D, center_7D)
         ################# Ali Agha
@@ -329,15 +337,8 @@ class Point_MAE_7D(nn.Module):
 
         B, _, C = x_vis.shape  # B VIS C
 
-        if torch.isnan(x_vis).any():
-            print("******************* nan in x_vis -----------------------")
-
         pos_emd_vis = self.decoder_pos_embed(center_7D[~mask]).reshape(B, -1, C)
         pos_emd_mask = self.decoder_pos_embed(center_7D[mask]).reshape(B, -1, C)
-        if torch.isnan(pos_emd_vis).any() or torch.isnan(pos_emd_mask).any():
-            print(
-                "******************* nan in pos_emd_vis pos_emd_mask -----------------------"
-            )
 
         _, N, _ = pos_emd_mask.shape
         mask_token = self.mask_token.expand(B, N, -1)
@@ -355,23 +356,13 @@ class Point_MAE_7D(nn.Module):
             .reshape(B * M, -1, 7)
         )  # B M 1024
 
-        gt_points = neighborhood[mask].reshape(B * M, -1, 3)
-        gt_points_7D = neighborhood_7D[mask].reshape(B * M, -1, 7)
-
-        if torch.isnan(rebuild_points_7D).any():
-            print(
-                "******************* nan in rebuild_points_7D -----------------------"
-            )
-
         # rebuild_points = misc.point_7D_to_xyz(rebuild_points_7D)
-
-        # if torch.isnan(rebuild_points).any():
-        #     print(
-        #         "******************* nan in rebuild_points -----------------------"
-        #     )
-
+        # gt_points = neighborhood[mask].reshape(B * M, -1, 3)
         # loss1 = self.loss_func(rebuild_points, gt_points)
+
+        gt_points_7D = neighborhood_7D[mask].reshape(B * M, -1, 7)
         loss1 = misc.chamfer_loss_7d(rebuild_points_7D, gt_points_7D)
+        rebuild_points = rebuild_points_7D
 
         if vis:  # visualization
             vis_points = neighborhood[~mask].reshape(B * (self.num_group - M), -1, 3)

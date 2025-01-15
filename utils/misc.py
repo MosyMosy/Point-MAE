@@ -545,7 +545,6 @@ def euler_radius_to_point(euler_angles, radius):
     return xyz
 
 
-
 def point_xyz_to_7D(pc):
     """
     Convert a 3D point cloud to a 7D representation (radius + 6D rotation).
@@ -557,7 +556,9 @@ def point_xyz_to_7D(pc):
         torch.Tensor: Tensor of shape (B, N, 7) with 1 radius and 6D rotation.
     """
     assert pc.shape[-1] == 3, "The last dimension of the point cloud should be 3."
-    assert len(pc.shape) == 3, "The input point cloud should have 3 dimensions (B, N, 3)."
+    assert len(pc.shape) == 3, (
+        "The input point cloud should have 3 dimensions (B, N, 3)."
+    )
 
     euler, radius = point_to_euler_radius(pc)
 
@@ -590,7 +591,9 @@ def point_7D_to_xyz(pc_7d):
     # Debug rotation matrix
     assert not torch.isnan(rotation_matrix).any(), "NaN in rotation matrix!"
     assert torch.allclose(
-        torch.det(rotation_matrix), torch.ones_like(torch.det(rotation_matrix)), atol=1e-6
+        torch.det(rotation_matrix),
+        torch.ones_like(torch.det(rotation_matrix)),
+        atol=1e-6,
     ), "Invalid rotation matrix!"
 
     # Convert rotation matrix to Euler angles
@@ -642,3 +645,127 @@ def chamfer_loss_7d(p, q, weight_radius=1.0, weight_rotation=1.0):
     # Final Chamfer Loss
     loss = loss_p_to_q + loss_q_to_p
     return loss
+
+
+def normalize_7D_radius(
+    pc, mean: float = 0.5302363038063049, std: float = 0.22668714821338654
+):
+    mean_radius = torch.tensor([[[mean, 0, 0, 0, 0, 0, 0]]], device=pc.device)
+    std_radius = torch.tensor([[[std, 1, 1, 1, 1, 1, 1]]], device=pc.device)
+
+    pc_7d_normed = (pc - mean_radius) / std_radius
+    return pc_7d_normed
+
+
+def inverse_normalize_7D_radius(
+    pc_7d_normed, mean: float = 0.5302363038063049, std: float = 0.22668714821338654
+):
+    mean_radius = torch.tensor([[[mean, 0, 0, 0, 0, 0, 0]]], device=pc_7d_normed.device)
+    std_radius = torch.tensor([[[std, 1, 1, 1, 1, 1, 1]]], device=pc_7d_normed.device)
+
+    pc_7d_unnormed = pc_7d_normed * std_radius + mean_radius
+    return pc_7d_unnormed
+
+
+def normalize_7D_rotation(
+    pc,
+    mean: list = [
+        -0.00013076931645628065,
+        -0.008457111194729805,
+        0.00080042117042467,
+        0.0010340140433982015,
+        -0.00020342960488051176,
+        0.022919561713933945,
+    ],
+    std: list = [
+        0.6049997806549072,
+        0.6612724661827087,
+        0.4434205889701843,
+        0.521811306476593,
+        0.7500981092453003,
+        0.4056345522403717,
+    ],
+):
+    mean_rotation = torch.tensor([[[0, *mean]]], device=pc.device)
+    std_rotation = torch.tensor([[[1, *std]]], device=pc.device)
+
+    pc_7d_normed = (pc - mean_rotation) / std_rotation
+    return pc_7d_normed
+
+
+def inverse_normalize_7D_rotation(
+    pc_7d_normed,
+    mean: list = [
+        -0.00013076931645628065,
+        -0.008457111194729805,
+        0.00080042117042467,
+        0.0010340140433982015,
+        -0.00020342960488051176,
+        0.022919561713933945,
+    ],
+    std: list = [
+        0.6049997806549072,
+        0.6612724661827087,
+        0.4434205889701843,
+        0.521811306476593,
+        0.7500981092453003,
+        0.4056345522403717,
+    ],
+):
+    mean_rotation = torch.tensor([[[0, *mean]]], device=pc_7d_normed.device)
+    std_rotation = torch.tensor([[[1, *std]]], device=pc_7d_normed.device)
+
+    pc_7d_unnormed = pc_7d_normed * std_rotation + mean_rotation
+    return pc_7d_unnormed
+
+
+def normalize_7D(
+    pc,
+    mean: list = [
+        0.5302363038063049,
+        -0.00013076931645628065,
+        -0.008457111194729805,
+        0.00080042117042467,
+        0.0010340140433982015,
+        -0.00020342960488051176,
+        0.022919561713933945,
+    ],
+    std: list = [
+        0.22668714821338654,
+        0.6049997806549072,
+        0.6612724661827087,
+        0.4434205889701843,
+        0.521811306476593,
+        0.7500981092453003,
+        0.4056345522403717,
+    ],
+):
+    pc_7d_normed = normalize_7D_radius(pc, mean[0], std[0])
+    pc_7d_normed = normalize_7D_rotation(pc_7d_normed, mean[1:], std[1:])
+    return pc_7d_normed
+
+
+def inverse_normalize_7D(
+    pc_7d_normed,
+    mean: list = [
+        0.5302363038063049,
+        -0.00013076931645628065,
+        -0.008457111194729805,
+        0.00080042117042467,
+        0.0010340140433982015,
+        -0.00020342960488051176,
+        0.022919561713933945,
+    ],
+    std: list = [
+        0.22668714821338654,
+        0.6049997806549072,
+        0.6612724661827087,
+        0.4434205889701843,
+        0.521811306476593,
+        0.7500981092453003,
+        0.4056345522403717,
+    ],
+):
+    pc_7d_unnormed = inverse_normalize_7D_rotation(pc_7d_normed, mean[1:], std[1:])
+    pc_7d_unnormed = inverse_normalize_7D_radius(pc_7d_unnormed, mean[0], std[0])
+    return pc_7d_unnormed

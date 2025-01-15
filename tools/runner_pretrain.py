@@ -246,12 +246,30 @@ def run_net(args, config, train_writer=None, val_writer=None):
 
         if epoch % args.val_freq == 0 and epoch != 0:
             # Validate the current model
-            metrics = validate(base_model, extra_train_dataloader, extra_test_dataloader, epoch, val_writer, args, config, logger=logger)
-        
+            metrics = validate(
+                base_model,
+                extra_train_dataloader,
+                extra_test_dataloader,
+                epoch,
+                val_writer,
+                args,
+                config,
+                logger=logger,
+            )
+
             # Save ckeckpoints
             if metrics.better_than(best_metrics):
                 best_metrics = metrics
-                builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-best', args, logger = logger)
+                builder.save_checkpoint(
+                    base_model,
+                    optimizer,
+                    epoch,
+                    metrics,
+                    best_metrics,
+                    "ckpt-best",
+                    args,
+                    logger=logger,
+                )
         builder.save_checkpoint(
             base_model,
             optimizer,
@@ -304,7 +322,7 @@ def validate(
         for idx, (taxonomy_ids, model_ids, data) in enumerate(extra_train_dataloader):
             points = data[0].cuda()
             label = data[1].cuda()
-            
+
             points = misc.fps(points, npoints)
 
             assert points.size(1) == npoints
@@ -317,7 +335,6 @@ def validate(
         for idx, (taxonomy_ids, model_ids, data) in enumerate(test_dataloader):
             points = data[0].cuda()
             label = data[1].cuda()
-            
 
             points = misc.fps(points, npoints)
             assert points.size(1) == npoints
