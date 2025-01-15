@@ -402,39 +402,6 @@ def get_3d_sincos_pos_embed(embed_dim, points):
     return pos_embed
 
 
-def compute_angles_to_axes(points):
-    """
-    Compute angles between each point vector and the X, Y, Z axes.
-
-    Args:
-        points: Tensor of shape (B, N, 3), where B is batch size, N is number of points,
-                and 3 corresponds to (x, y, z) coordinates.
-
-    Returns:
-        angles: Tensor of shape (B, N, 3), where the last dimension corresponds to
-                angles with the X, Y, and Z axes (in radians).
-    """
-    # Compute the norm of each point vector: (B, N)
-    norms = torch.linalg.norm(points, dim=-1, keepdim=True)  # (B, N, 1)
-
-    # Normalize points to unit vectors to avoid dividing by zero
-    norms = torch.clamp(norms, min=1e-8)  # Avoid division by zero
-
-    # Compute the cosine of angles with each axis
-    cos_angles = points / norms  # (B, N, 3)
-
-    # Compute the angles in radians
-    angles = torch.acos(cos_angles)  # (B, N, 3)
-
-    return angles
-
-
-def compute_polar_pose_embed(embed_dim, points):
-    polar_points = compute_angles_to_axes(points)
-    polar_embed = get_3d_sincos_pos_embed(embed_dim, polar_points)
-    return polar_embed
-
-
 def compute_polar_coordinates(pc):
     """
     Convert a batch of 3D points to polar coordinates (radius, azimuth, polar angle).
@@ -469,6 +436,240 @@ def compute_polar_coordinates(pc):
     polar_coordinates = torch.stack((radius, azimuth, polar_angle), dim=-1)
 
     return polar_coordinates
+
+
+def point_to_spherical(pc):
+    """
+    Convert a batch of 3D points to spherical coordinates (radius, azimuth, polar angle).
+
+    Args:
+        pc (torch.Tensor): Tensor of shape (B, N, 3) with (x, y, z) coordinates.
+
+    Returns:
+        torch.Tensor: Tensor of shape (B, N, 3) with (radius, azimuth, polar angle).
+    """
+    # Extract x, y, z coordinates
+    x = pc[..., 0]
+    y = pc[..., 1]
+    z = pc[..., 2]
+
+    # Compute radius
+    radius = torch.sqrt(x**2 + y**2 + z**2)
+
+    # Avoid division by zero by adding a small epsilon
+    epsilon = 1e-8
+    safe_radius = torch.clamp(radius, min=epsilon)
+
+    # Compute azimuth (theta): atan2(y, x)
+    azimuth = torch.atan2(y, x)
+
+    # Compute polar angle (phi): acos(z / r)
+    polar_angle = torch.acos(torch.clamp(z / safe_radius, min=-1.0, max=1.0))
+
+    # Handle points with zero radius (origin)
+    polar_angle[radius == 0] = 0.0  # Set phi to 0 for origin
+    azimuth[radius == 0] = 0.0      # Set theta to 0 for origin
+
+    # Combine into a single tensor
+    spherical_coordinates = torch.stack((radius, azimuth, polar_angle), dim=-1)
+
+    return spherical_coordinates
+
+
+
+def spherical_to_point(spherical_coordinates):
+    """
+    Convert spherical coordinates to XYZ coordinates.
+
+    Args:
+        spherical_coordinates (torch.Tensor): Tensor of shape (B, N, 3) with radius, azimuth, and polar angle.
+
+    Returns:
+        torch.Tensor: Tensor of shape (B, N, 3) with reconstructed XYZ coordinates.
+    """
+    # Extract radius, azimuth, and polar angle
+    radius = spherical_coordinates[..., 0]
+    azimuth = spherical_coordinates[..., 1]
+    polar_angle = spherical_coordinates[..., 2]
+
+    # Compute direction vector from radius, azimuth, and polar angle
+    x = radius * torch.sin(polar_angle) * torch.cos(azimuth)
+    y = radius * torch.sin(polar_angle) * torch.sin(azimuth)
+    z = radius * torch.cos(polar_angle)
+
+    # Combine into a single tensor
+    xyz = torch.stack((x, y, z), dim=-1)
+
+    return xyz
+
+
+def spherical_to_continues(spherical_coordinates):
+    """
+    Convert spherical coordinates to a continues 5D representation.
+
+    Args:
+        spherical_coordinates (torch.Tensor): Tensor of shape (B, N, 3) with radius, azimuth, and polar angle.
+
+    Returns:
+        torch.Tensor: Tensor of shape (B, N, 5) with radius, sin(azimuth), cos(azimuth), sin(polar angle), cos(polar angle).
+    """
+    # Extract radius, azimuth, and polar angle
+    radius = spherical_coordinates[..., 0]
+    azimuth = spherical_coordinates[..., 1]
+    polar_angle = spherical_coordinates[..., 2]
+
+    # Compute the sin and cos of the azimuth and polar angle
+    sin_azimuth = torch.sin(azimuth)
+    cos_azimuth = torch.cos(azimuth)
+    sin_polar_angle = torch.sin(polar_angle)
+    cos_polar_angle = torch.cos(polar_angle)
+
+    # Combine into a single tensor
+    spherical_continues = torch.stack(
+        (radius, sin_azimuth, cos_azimuth, sin_polar_angle, cos_polar_angle), dim=-1
+    )
+
+    return spherical_continues
+
+
+def continues_to_spherical(spherical_continues):
+    """
+    Convert a continuous 5D representation back to spherical coordinates.
+
+    Args:
+        spherical_continues (torch.Tensor): Tensor of shape (B, N, 5) with
+                                            [radius, sin(azimuth), cos(azimuth), sin(polar), cos(polar)].
+
+    Returns:
+        torch.Tensor: Tensor of shape (B, N, 3) with [radius, azimuth, polar angle].
+    """
+    # Extract components
+    radius = spherical_continues[..., 0]  # Radius (B, N)
+    sin_azimuth = spherical_continues[..., 1]
+    cos_azimuth = spherical_continues[..., 2]
+    sin_polar = spherical_continues[..., 3]
+    cos_polar = spherical_continues[..., 4]
+
+    # Compute azimuth (theta) using atan2
+    azimuth = torch.atan2(sin_azimuth, cos_azimuth)  # (B, N)
+
+    # Compute polar angle (phi) using atan2
+    polar_angle = torch.atan2(sin_polar, cos_polar)  # (B, N)
+
+    # Combine into spherical coordinates
+    spherical_coordinates = torch.stack(
+        (radius, azimuth, polar_angle), dim=-1
+    )  # (B, N, 3)
+
+    return spherical_coordinates
+
+
+def point_xyz_to_5D(pc):
+    """
+    Convert a 3D point cloud to a 5D representation (radius, sin(azimuth), cos(azimuth), sin(polar), cos(polar)).
+
+    Args:
+        pc (torch.Tensor): Tensor of shape (B, N, 3) with (x, y, z) coordinates.
+
+    Returns:
+        torch.Tensor: Tensor of shape (B, N, 5) with 5D representation.
+    """
+    assert pc.shape[-1] == 3, "The last dimension of the point cloud should be 3."
+    assert len(pc.shape) == 3, (
+        "The input point cloud should have 3 dimensions (B, N, 3)."
+    )
+
+    spherical_coordinates = point_to_spherical(pc)
+    spherical_continues = spherical_to_continues(spherical_coordinates)
+
+    return spherical_continues
+
+
+def point_5D_to_xyz(pc_5d):
+    """
+    Convert a 5D point cloud representation back to 3D XYZ coordinates.
+
+    Args:
+        pc_5d (torch.Tensor): Tensor of shape (B, N, 5) containing radius and 4D representation.
+
+    Returns:
+        torch.Tensor: Tensor of shape (B, N, 3) with reconstructed XYZ coordinates.
+    """
+    assert pc_5d.shape[-1] == 5, "Expected input shape (B, N, 5)."
+
+    spherical_continues = pc_5d
+    spherical_coordinates = continues_to_spherical(spherical_continues)
+    xyz = spherical_to_point(spherical_coordinates)
+
+    return xyz
+
+
+def normalize_5D(
+    pc,
+    normalize_mode: str = "none",
+    mean: list = [0.5302363038063049, 0, 0, 0, 0],
+    std: list = [0.22668714821338654, 1, 1, 1, 1],
+):
+    if normalize_mode == "none":
+        return pc
+    else:
+        raise ValueError("Invalid normalization mode.")
+    
+def inverse_normalize_5D(
+    pc,
+    normalize_mode: str = "none",
+    mean: list = [0.5302363038063049, 0, 0, 0, 0],
+    std: list = [0.22668714821338654, 1, 1, 1, 1],
+):
+    if normalize_mode == "none":
+        return pc
+    else:
+        raise ValueError("Invalid normalization mode.")
+
+def chamfer_loss_5D(source, target):
+    """
+    Compute the Chamfer Loss for 5D point cloud representations.
+
+    Args:
+        source (torch.Tensor): Source point cloud of shape (B, N, 5).
+        target (torch.Tensor): Target point cloud of shape (B, M, 5).
+
+    Returns:
+        torch.Tensor: Scalar tensor representing the Chamfer Loss.
+    """
+    # Ensure inputs are valid
+    assert source.shape[-1] == 5, "Source points should be in 5D space."
+    assert target.shape[-1] == 5, "Target points should be in 5D space."
+
+    # Extract radius and angular components
+    r_s, sin_theta_s, cos_theta_s, sin_phi_s, cos_phi_s = torch.split(source, 1, dim=-1)
+    r_t, sin_theta_t, cos_theta_t, sin_phi_t, cos_phi_t = torch.split(target, 1, dim=-1)
+
+    # Compute pairwise distances for radius
+    radius_dist = (r_s - r_t.transpose(1, 2))**2  # Shape: (B, N, M)
+
+    # Compute pairwise distances for angles
+    sin_theta_dist = (sin_theta_s - sin_theta_t.transpose(1, 2))**2
+    cos_theta_dist = (cos_theta_s - cos_theta_t.transpose(1, 2))**2
+    sin_phi_dist = (sin_phi_s - sin_phi_t.transpose(1, 2))**2
+    cos_phi_dist = (cos_phi_s - cos_phi_t.transpose(1, 2))**2
+
+    # Total angular distance
+    angular_dist = sin_theta_dist + cos_theta_dist + sin_phi_dist + cos_phi_dist  # (B, N, M)
+
+    # Total distance in 5D space
+    total_dist = radius_dist + angular_dist  # (B, N, M)
+
+    # For each point in source, find the closest point in target
+    src_to_tgt_dist = torch.min(total_dist, dim=2).values  # (B, N)
+
+    # For each point in target, find the closest point in source
+    tgt_to_src_dist = torch.min(total_dist, dim=1).values  # (B, M)
+
+    # Symmetric Chamfer Loss
+    loss = src_to_tgt_dist.mean() + tgt_to_src_dist.mean()
+
+    return loss
 
 
 def point_to_euler_radius(pc):
@@ -719,7 +920,7 @@ def inverse_normalize_7D_rotation(
     return pc_7d_unnormed
 
 
-def normalize_7D(
+def normalize_7D_full(
     pc,
     mean: list = [
         0.5302363038063049,
@@ -745,7 +946,7 @@ def normalize_7D(
     return pc_7d_normed
 
 
-def inverse_normalize_7D(
+def inverse_normalize_7D_full(
     pc_7d_normed,
     mean: list = [
         0.5302363038063049,
@@ -769,3 +970,71 @@ def inverse_normalize_7D(
     pc_7d_unnormed = inverse_normalize_7D_rotation(pc_7d_normed, mean[1:], std[1:])
     pc_7d_unnormed = inverse_normalize_7D_radius(pc_7d_unnormed, mean[0], std[0])
     return pc_7d_unnormed
+
+
+def normalize_7D(
+    pc,
+    normalize_mode="none",
+    mean: list = [
+        0.5302363038063049,
+        -0.00013076931645628065,
+        -0.008457111194729805,
+        0.00080042117042467,
+        0.0010340140433982015,
+        -0.00020342960488051176,
+        0.022919561713933945,
+    ],
+    std: list = [
+        0.22668714821338654,
+        0.6049997806549072,
+        0.6612724661827087,
+        0.4434205889701843,
+        0.521811306476593,
+        0.7500981092453003,
+        0.4056345522403717,
+    ],
+):
+    if normalize_mode == "full":
+        return normalize_7D_full(pc, mean, std)
+    elif normalize_mode == "radius":
+        return normalize_7D_radius(pc, mean[0], std[0])
+    elif normalize_mode == "rotation":
+        return normalize_7D_rotation(pc, mean[1:], std[1:])
+    elif normalize_mode == "none":
+        return pc
+    else:
+        raise ValueError("Invalid normalization mode.")
+
+
+def inverse_normalize_7D(
+    pc_7d_normed,
+    normalize_mode="none",
+    mean: list = [
+        0.5302363038063049,
+        -0.00013076931645628065,
+        -0.008457111194729805,
+        0.00080042117042467,
+        0.0010340140433982015,
+        -0.00020342960488051176,
+        0.022919561713933945,
+    ],
+    std: list = [
+        0.22668714821338654,
+        0.6049997806549072,
+        0.6612724661827087,
+        0.4434205889701843,
+        0.521811306476593,
+        0.7500981092453003,
+        0.4056345522403717,
+    ],
+):
+    if normalize_mode == "full":
+        return inverse_normalize_7D_full(pc_7d_normed, mean, std)
+    elif normalize_mode == "radius":
+        return inverse_normalize_7D_radius(pc_7d_normed, mean[0], std[0])
+    elif normalize_mode == "rotation":
+        return inverse_normalize_7D_rotation(pc_7d_normed, mean[1:], std[1:])
+    elif normalize_mode == "none":
+        return pc_7d_normed
+    else:
+        raise ValueError("Invalid normalization mode.")

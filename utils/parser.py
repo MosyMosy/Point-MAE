@@ -6,13 +6,13 @@ from pathlib import Path
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--config", type=str, help="yaml config file", default="cfgs/pretrain_7D.yaml"
+        "--config", type=str, help="yaml config file", default="cfgs/pretrain_5D.yaml"
     )
     parser.add_argument(
         "--launcher", choices=["none", "pytorch"], default="none", help="job launcher"
     )
     parser.add_argument("--local_rank", type=int, default=0)
-    parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument("--num_workers", type=int, default=16)
     # seed
     parser.add_argument("--seed", type=int, default=0, help="random seed")
     parser.add_argument(

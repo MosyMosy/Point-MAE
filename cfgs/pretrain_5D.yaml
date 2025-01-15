@@ -33,7 +33,7 @@ dataset : {
             others: {subset: 'test', npoints: 1024}}}
 
 model : {
-  NAME: Point_MAE_7D,
+  NAME: Point_MAE_5D,
   group_size: 32,
   num_group: 64,
   loss: cdl2,
@@ -48,7 +48,7 @@ model : {
     decoder_depth: 4,
     decoder_num_heads: 6,
   },
-  normalize_mode: "radius", # "none" or "radius" or "full", or "rotation"
+  normalize_mode: "none", # "none" or "radius" or "full", or "rotation"
   }
 
 npoints: 1024

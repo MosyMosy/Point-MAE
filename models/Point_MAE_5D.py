@@ -40,12 +40,12 @@ class ChamferDistanceL2(torch.nn.Module):
         return chamfer_distance(x, y, norm=2)[0]
 
 
-class Encoder_7D(nn.Module):  ## Embedding module # 3D > 7D
+class Encoder_5D(nn.Module):  ## Embedding module # 3D > 5D
     def __init__(self, encoder_channel):
         super().__init__()
         self.encoder_channel = encoder_channel
         self.first_conv = nn.Sequential(
-            nn.Conv1d(7, 128, 1),  # 3D > 7D
+            nn.Conv1d(5, 128, 1),  # 3D > 5D
             nn.BatchNorm1d(128),
             nn.ReLU(inplace=True),
             nn.Conv1d(128, 256, 1),
@@ -59,12 +59,12 @@ class Encoder_7D(nn.Module):  ## Embedding module # 3D > 7D
 
     def forward(self, point_groups):
         """
-        point_groups : B G N 7
+        point_groups : B G N 5
         -----------------
         feature_global : B G C
         """
         bs, g, n, _ = point_groups.shape
-        point_groups = point_groups.reshape(bs * g, n, 7)  # 3D > 7D
+        point_groups = point_groups.reshape(bs * g, n, 5)  # 3D > 5D
         # encoder
         feature = self.first_conv(point_groups.transpose(2, 1))  # BG 256 n
         feature_global = torch.max(feature, dim=2, keepdim=True)[0]  # BG 256 1
@@ -77,7 +77,7 @@ class Encoder_7D(nn.Module):  ## Embedding module # 3D > 7D
 
 
 # Pretrain model
-class MaskTransformer_7D(nn.Module):  # 3D > 7D
+class MaskTransformer_5D(nn.Module):  # 3D > 5D
     def __init__(self, config, **kwargs):
         super().__init__()
         self.config = config
@@ -90,12 +90,12 @@ class MaskTransformer_7D(nn.Module):  # 3D > 7D
         print_log(f"[args] {config.transformer_config}", logger="Transformer")
         # embedding
         self.encoder_dims = config.transformer_config.encoder_dims
-        self.encoder = Encoder_7D(encoder_channel=self.encoder_dims)
+        self.encoder = Encoder_5D(encoder_channel=self.encoder_dims)
 
         self.mask_type = config.transformer_config.mask_type
 
         self.pos_embed = nn.Sequential(
-            nn.Linear(7, 128),  # 3D > 7D
+            nn.Linear(5, 128),  # 3D > 5D
             nn.GELU(),
             nn.Linear(128, self.trans_dim),
         )
@@ -126,7 +126,7 @@ class MaskTransformer_7D(nn.Module):  # 3D > 7D
 
     def _mask_center_block(self, center, noaug=False):
         """
-        center : B G 7
+        center : B G 5
         --------------
         mask : B G (bool)
         """
@@ -136,14 +136,14 @@ class MaskTransformer_7D(nn.Module):  # 3D > 7D
         # mask a continuous part
         mask_idx = []
         for points in center:
-            # G 7
-            points = points.unsqueeze(0)  # 1 G 7
+            # G 5
+            points = points.unsqueeze(0)  # 1 G 5
             index = random.randint(0, points.size(1) - 1)
             distance_matrix = torch.norm(
-                points[:, index].reshape(1, 1, 7) - points,
+                points[:, index].reshape(1, 1, 5) - points,
                 p=2,
-                dim=-1,  # 3D > 7D
-            )  # 1 1 7 - 1 G 7 -> 1 G
+                dim=-1,  # 3D > 5D
+            )  # 1 1 5 - 1 G 5 -> 1 G
 
             idx = torch.argsort(distance_matrix, dim=-1, descending=False)[0]  # G
             ratio = self.mask_ratio
@@ -158,7 +158,7 @@ class MaskTransformer_7D(nn.Module):  # 3D > 7D
 
     def _mask_center_rand(self, center, noaug=False):
         """
-        center : B G 7
+        center : B G 5
         --------------
         mask : B G (bool)
         """
@@ -201,7 +201,7 @@ class MaskTransformer_7D(nn.Module):  # 3D > 7D
         x_vis = group_input_tokens[~bool_masked_pos].reshape(batch_size, -1, C)
         # add pos embedding
         # mask pos center
-        masked_center = center[~bool_masked_pos].reshape(batch_size, -1, 7)  # 3D > 7D
+        masked_center = center[~bool_masked_pos].reshape(batch_size, -1, 5)  # 3D > 5D
         pos = self.pos_embed(masked_center)
         if torch.isnan(pos).any():
             print("******************* nan in pos -----------------------")
@@ -216,7 +216,7 @@ class MaskTransformer_7D(nn.Module):  # 3D > 7D
         return x_vis, bool_masked_pos
 
 
-class Group_7D(nn.Module):  # FPS + KNN
+class Group_5D(nn.Module):  # FPS + KNN
     def __init__(self, num_group, group_size):
         super().__init__()
         self.num_group = num_group
@@ -253,19 +253,19 @@ class Group_7D(nn.Module):  # FPS + KNN
 
 
 @MODELS.register_module()
-class Point_MAE_7D(nn.Module):
+class Point_MAE_5D(nn.Module):
     def __init__(self, config):
         super().__init__()
         print_log(f"[Point_MAE] ", logger="Point_MAE")
         self.config = config
         self.trans_dim = config.transformer_config.trans_dim
-        self.MAE_encoder = MaskTransformer_7D(config)
+        self.MAE_encoder = MaskTransformer_5D(config)
         self.group_size = config.group_size
         self.num_group = config.num_group
         self.drop_path_rate = config.transformer_config.drop_path_rate
         self.mask_token = nn.Parameter(torch.zeros(1, 1, self.trans_dim))
         self.decoder_pos_embed = nn.Sequential(
-            nn.Linear(7, 128),  # 3D > 7D
+            nn.Linear(5, 128),  # 3D > 5D
             nn.GELU(),
             nn.Linear(128, self.trans_dim),
         )
@@ -286,7 +286,7 @@ class Point_MAE_7D(nn.Module):
             f"[Point_MAE] divide point cloud into G{self.num_group} x S{self.group_size} points ...",
             logger="Point_MAE",
         )
-        self.group_divider = Group_7D(
+        self.group_divider = Group_5D(
             num_group=self.num_group, group_size=self.group_size
         )
 
@@ -295,7 +295,7 @@ class Point_MAE_7D(nn.Module):
             # nn.Conv1d(self.trans_dim, 1024, 1),
             # nn.BatchNorm1d(1024),
             # nn.LeakyReLU(negative_slope=0.2),
-            nn.Conv1d(self.trans_dim, 7 * self.group_size, 1)  # 3D > 7D
+            nn.Conv1d(self.trans_dim, 5 * self.group_size, 1)  # 3D > 5D
         )
 
         trunc_normal_(self.mask_token, std=0.02)
@@ -317,20 +317,20 @@ class Point_MAE_7D(nn.Module):
     def forward(self, pts, vis=False, noaug=False):
         B, N, _ = pts.shape
         neighborhood, center = self.group_divider(pts)
-        # 3D > 7D
-        neighborhood_7D = misc.point_xyz_to_7D(
+        # 3D > 5D
+        neighborhood_5D = misc.point_xyz_to_5D(
             neighborhood.reshape(B * self.num_group, -1, 3)
         )
-        center_7D = misc.point_xyz_to_7D(center)
+        center_5D = misc.point_xyz_to_5D(center)
 
-        neighborhood_7D = misc.normalize_7D(
-            neighborhood_7D, normalize_mode=self.normalize_mode
+        neighborhood_5D = misc.normalize_5D(
+            neighborhood_5D, normalize_mode=self.normalize_mode
         )
-        center_7D = misc.normalize_7D(center_7D, normalize_mode=self.normalize_mode)
+        center_5D = misc.normalize_5D(center_5D, normalize_mode=self.normalize_mode)
 
-        neighborhood_7D = neighborhood_7D.reshape(B, self.num_group, -1, 7)
+        neighborhood_5D = neighborhood_5D.reshape(B, self.num_group, -1, 5)
 
-        x_vis, mask = self.MAE_encoder(neighborhood_7D, center_7D)
+        x_vis, mask = self.MAE_encoder(neighborhood_5D, center_5D)
         ################# Ali Agha
         if noaug:
             return x_vis
@@ -338,8 +338,8 @@ class Point_MAE_7D(nn.Module):
 
         B, _, C = x_vis.shape  # B VIS C
 
-        pos_emd_vis = self.decoder_pos_embed(center_7D[~mask]).reshape(B, -1, C)
-        pos_emd_mask = self.decoder_pos_embed(center_7D[mask]).reshape(B, -1, C)
+        pos_emd_vis = self.decoder_pos_embed(center_5D[~mask]).reshape(B, -1, C)
+        pos_emd_mask = self.decoder_pos_embed(center_5D[mask]).reshape(B, -1, C)
 
         _, N, _ = pos_emd_mask.shape
         mask_token = self.mask_token.expand(B, N, -1)
@@ -351,19 +351,19 @@ class Point_MAE_7D(nn.Module):
             print("******************* nan in x_rec -----------------------")
 
         B, M, C = x_rec.shape
-        rebuild_points_7D = (
+        rebuild_points_5D = (
             self.increase_dim(x_rec.transpose(1, 2))
             .transpose(1, 2)
-            .reshape(B * M, -1, 7)
+            .reshape(B * M, -1, 5)
         )  # B M 1024
 
-        # rebuild_points = misc.point_7D_to_xyz(rebuild_points_7D)
+        # rebuild_points = misc.point_5D_to_xyz(rebuild_points_5D)
         # gt_points = neighborhood[mask].reshape(B * M, -1, 3)
-        # loss1 = self.loss_func(rebuild_points, gt_points)
+        # loss1 = self.loss_func(rebuild_points.to(gt_points.dtype), gt_points)
 
-        gt_points_7D = neighborhood_7D[mask].reshape(B * M, -1, 7)
-        loss1 = misc.chamfer_loss_7d(rebuild_points_7D, gt_points_7D)
-        rebuild_points = rebuild_points_7D
+        gt_points_5D = neighborhood_5D[mask].reshape(B * M, -1, 5)
+        loss1 = misc.chamfer_loss_5D(rebuild_points_5D, gt_points_5D)
+        rebuild_points = rebuild_points_5D
 
         if vis:  # visualization
             vis_points = neighborhood[~mask].reshape(B * (self.num_group - M), -1, 3)
@@ -383,7 +383,7 @@ class Point_MAE_7D(nn.Module):
 
 # finetune model
 @MODELS.register_module()
-class PointTransformer_7D(nn.Module):
+class PointTransformer_5D(nn.Module):
     def __init__(self, config, **kwargs):
         super().__init__()
         self.config = config
@@ -398,19 +398,19 @@ class PointTransformer_7D(nn.Module):
         self.num_group = config.num_group
         self.encoder_dims = config.encoder_dims
 
-        self.group_divider = Group_7D(
+        self.group_divider = Group_5D(
             num_group=self.num_group, group_size=self.group_size
         )
 
-        self.encoder = Encoder_7D(encoder_channel=self.encoder_dims)
+        self.encoder = Encoder_5D(encoder_channel=self.encoder_dims)
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, self.trans_dim))
         self.cls_pos = nn.Parameter(torch.randn(1, 1, self.trans_dim))
 
         self.pos_embed = nn.Sequential(
-            nn.Linear(7, 128),
+            nn.Linear(5, 128),
             nn.GELU(),
-            nn.Linear(128, self.trans_dim),  # 3D > 7D
+            nn.Linear(128, self.trans_dim),  # 3D > 5D
         )
 
         dpr = [x.item() for x in torch.linspace(0, self.drop_path_rate, self.depth)]
@@ -506,25 +506,25 @@ class PointTransformer_7D(nn.Module):
         B, N, _ = pts.shape
         neighborhood, center = self.group_divider(pts)
 
-        # 3D > 7D
-        neighborhood_7D = misc.point_xyz_to_7D(
+        # 3D > 5D
+        neighborhood_5D = misc.point_xyz_to_5D(
             neighborhood.reshape(B * self.num_group, -1, 3)
         )
-        center_7D = misc.point_xyz_to_7D(center)
+        center_5D = misc.point_xyz_to_5D(center)
 
-        neighborhood_7D = misc.normalize_7D(
-            neighborhood_7D, normalize_mode=self.normalize_mode
+        neighborhood_5D = misc.normalize_5D(
+            neighborhood_5D, normalize_mode=self.normalize_mode
         )
-        center_7D = misc.normalize_7D(center_7D, normalize_mode=self.normalize_mode)
+        center_5D = misc.normalize_5D(center_5D, normalize_mode=self.normalize_mode)
 
-        neighborhood_7D = neighborhood_7D.reshape(B, self.num_group, -1, 7)
+        neighborhood_5D = neighborhood_5D.reshape(B, self.num_group, -1, 5)
 
-        group_input_tokens = self.encoder(neighborhood_7D)  # B G N
+        group_input_tokens = self.encoder(neighborhood_5D)  # B G N
 
         cls_tokens = self.cls_token.expand(group_input_tokens.size(0), -1, -1)
         cls_pos = self.cls_pos.expand(group_input_tokens.size(0), -1, -1)
 
-        pos = self.pos_embed(center_7D)
+        pos = self.pos_embed(center_5D)
 
         x = torch.cat((cls_tokens, group_input_tokens), dim=1)
         pos = torch.cat((cls_pos, pos), dim=1)

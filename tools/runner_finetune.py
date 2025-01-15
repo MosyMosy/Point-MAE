@@ -140,7 +140,7 @@ def run_net(args, config, train_writer=None, val_writer=None):
                 point_all = points.size(1)
 
             # fps_idx = pointnet2_utils.furthest_point_sample(points, point_all)  # (B, npoint)
-            fps_idx = sample_farthest_points(points, K=point_all)
+            fps_idx = sample_farthest_points(points, K=point_all)[1]
             fps_idx = fps_idx[:, np.random.choice(point_all, npoints, False)]
             points = torch.gather(points, 1, fps_idx.unsqueeze(-1).expand(-1, -1, 3))
             # points = pointnet2_utils.gather_operation(points.transpose(1, 2).contiguous(), fps_idx).transpose(1, 2).contiguous()  # (B, N, 3)
