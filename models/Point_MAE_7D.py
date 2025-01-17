@@ -304,6 +304,7 @@ class Point_MAE_7D(nn.Module):
         self.build_loss_func(self.loss)
 
         self.normalize_mode = config["args"].normalize_mode
+        self.regularize = config["args"].regularize
 
     def build_loss_func(self, loss_type):
         if loss_type == "cdl1":
@@ -363,6 +364,17 @@ class Point_MAE_7D(nn.Module):
 
         gt_points_7D = neighborhood_7D[mask].reshape(B * M, -1, 7)
         loss1 = misc.chamfer_loss_7d(rebuild_points_7D, gt_points_7D)
+        if self.regularize:
+            vector1 = rebuild_points_7D[..., 1:4]  # First 3D vector
+            vector2 = rebuild_points_7D[..., 4:7]  # Second 3D vector
+
+            # Compute the dot product between the two vectors
+            dot_product = torch.sum(vector1 * vector2, dim=-1)  # Shape (...,)
+
+            # Compute the loss as the squared dot product
+            loss2 = torch.mean(dot_product**2)  # Scalar loss
+            loss1 += loss2
+            
         rebuild_points = rebuild_points_7D
 
         if vis:  # visualization

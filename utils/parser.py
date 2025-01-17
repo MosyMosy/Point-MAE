@@ -94,6 +94,13 @@ def get_args():
         choices=["none", "radius", "full", "rotation"],
         help="normalize mode",
     )
+    parser.add_argument(
+        "--regularize",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="whether to use regularize",
+    )
+        
 
     args = parser.parse_args()
 

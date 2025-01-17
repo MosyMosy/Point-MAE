@@ -304,6 +304,7 @@ class Point_MAE_5D(nn.Module):
         self.build_loss_func(self.loss)
 
         self.normalize_mode = config["args"].normalize_mode
+        self.regularize = config["args"].regularize
 
     def build_loss_func(self, loss_type):
         if loss_type == "cdl1":
@@ -369,6 +370,14 @@ class Point_MAE_5D(nn.Module):
         )
         gt_points_5D = neighborhood_5D[mask].reshape(B * M, -1, 5)
         loss1 = misc.chamfer_loss_5D(rebuild_points_5D, gt_points_5D)
+        if self.regularize:
+            loss2 = torch.abs(
+                (rebuild_points_5D[..., 1] ** 2 + rebuild_points_5D[..., 2] ** 2) - 1
+            ) + torch.abs(
+                (rebuild_points_5D[..., 3] ** 2 + rebuild_points_5D[..., 4] ** 2) - 1
+            )
+            
+            loss1 = loss1 + loss2.mean()
         rebuild_points = rebuild_points_5D
 
         if vis:  # visualization
