@@ -48,7 +48,6 @@ model : {
     decoder_depth: 4,
     decoder_num_heads: 6,
   },
-  normalize_mode: "none", # "none" or "radius" or "full", or "rotation"
   }
 
 npoints: 1024

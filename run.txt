@@ -1,0 +1,4 @@
+CUDA_VISIBLE_DEVICES=3 python main.py --config cfgs/pretrain_5D.yaml --exp_name 5Dv2_new_chamfer_normalized_full --normalize_mode full
+
+CUDA_VISIBLE_DEVICES=3 python main.py --config cfgs/finetune_scan_objonly_5D.yaml --finetune_model --exp_name 5Dv2_new_chamfer_normalized_full_last --ckpts experiments/pretrain_5D/cfgs/5Dv2_new_chamfer_normalized_full/ckpt-last.pth --normalize_mode full
+

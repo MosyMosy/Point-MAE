@@ -303,7 +303,7 @@ class Point_MAE_5D(nn.Module):
         # loss
         self.build_loss_func(self.loss)
 
-        self.normalize_mode = config.normalize_mode
+        self.normalize_mode = config["args"].normalize_mode
 
     def build_loss_func(self, loss_type):
         if loss_type == "cdl1":
@@ -357,10 +357,16 @@ class Point_MAE_5D(nn.Module):
             .reshape(B * M, -1, 5)
         )  # B M 1024
 
+        # force the output to be in the range of [-1, 1]
+        rebuild_points_5D = 2 * torch.sigmoid(rebuild_points_5D) - 1
+
         # rebuild_points = misc.point_5D_to_xyz(rebuild_points_5D)
         # gt_points = neighborhood[mask].reshape(B * M, -1, 3)
         # loss1 = self.loss_func(rebuild_points.to(gt_points.dtype), gt_points)
 
+        neighborhood_5D = misc.inverse_normalize_5D(
+            neighborhood_5D, normalize_mode=self.normalize_mode
+        )
         gt_points_5D = neighborhood_5D[mask].reshape(B * M, -1, 5)
         loss1 = misc.chamfer_loss_5D(rebuild_points_5D, gt_points_5D)
         rebuild_points = rebuild_points_5D
@@ -440,7 +446,7 @@ class PointTransformer_5D(nn.Module):
         trunc_normal_(self.cls_token, std=0.02)
         trunc_normal_(self.cls_pos, std=0.02)
 
-        self.normalize_mode = config.normalize_mode
+        self.normalize_mode = config["args"].normalize_mode
 
     def build_loss_func(self):
         self.loss_ce = nn.CrossEntropyLoss()

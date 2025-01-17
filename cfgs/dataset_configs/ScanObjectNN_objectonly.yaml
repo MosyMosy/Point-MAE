@@ -1,2 +1,3 @@
 NAME: ScanObjectNN
-ROOT: /export/datasets/public/Point_Cloud_Processing/data/ScanObjectNN/main_split_nobg
+# ROOT: /export/datasets/public/Point_Cloud_Processing/data/ScanObjectNN/main_split_nobg
+ROOT: /projets/moslem/data/ScanObjectNN/main_split_nobg

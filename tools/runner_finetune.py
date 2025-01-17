@@ -12,6 +12,7 @@ from datasets import data_transforms
 from pytorch3d.ops import sample_farthest_points
 from torchvision import transforms
 
+from easydict import EasyDict
 
 train_transforms = transforms.Compose(
     [
@@ -57,6 +58,7 @@ class Acc_Metric:
 
 def run_net(args, config, train_writer=None, val_writer=None):
     logger = get_logger(args.log_name)
+    config.model["args"] = EasyDict(vars(args))
     # build dataset
     (train_sampler, train_dataloader), (_, test_dataloader),= builder.dataset_builder(args, config.dataset.train), \
                                                             builder.dataset_builder(args, config.dataset.val)

@@ -303,7 +303,7 @@ class Point_MAE_7D(nn.Module):
         # loss
         self.build_loss_func(self.loss)
 
-        self.normalize_mode = config.normalize_mode
+        self.normalize_mode = config["args"].normalize_mode
 
     def build_loss_func(self, loss_type):
         if loss_type == "cdl1":
@@ -440,7 +440,7 @@ class PointTransformer_7D(nn.Module):
         trunc_normal_(self.cls_token, std=0.02)
         trunc_normal_(self.cls_pos, std=0.02)
 
-        self.normalize_mode = config.normalize_mode
+        self.normalize_mode = config["args"].normalize_mode
 
     def build_loss_func(self):
         self.loss_ce = nn.CrossEntropyLoss()

@@ -18,6 +18,22 @@ from pytorch3d.transforms.rotation_conversions import (
 # from pointnet2_ops import pointnet2_utils
 from pytorch3d.ops import sample_farthest_points
 
+from easydict import EasyDict
+
+def add_args_to_easydic_as_object(easydic_obj, args, args_key="args"):
+    """
+    Add all arguments from args to the EasyDict object as a nested object.
+
+    Args:
+        easydic_obj (EasyDict): The EasyDict object to update.
+        args (Namespace): The arguments from argparse.
+        args_key (str): The key under which to store the arguments.
+
+    Returns:
+        None
+    """
+    easydic_obj[args_key] = EasyDict(vars(args))
+    return easydic_obj
 
 def fps(data, number):
     """
@@ -341,13 +357,28 @@ def pc_to_tensor(pc):
 
 
 def normalize_xyz(
-    pc: torch.tensor, mean: list = [0, 0, 0], std: list = [0.356, 0.3052, 0.3358]
+    pc: torch.tensor,
+    mean: list = [0, 0, 0],
+    std: list = [0.356, 0.3052, 0.3358],
+    normalize_mode="full",
 ):
     assert pc.shape[-1] == 3, "The last dimension of the point cloud should be 3."
     mean = torch.tensor(mean, device=pc.device).expand_as(pc)
     std = torch.tensor(std, device=pc.device).expand_as(pc)
     torch.tensor([[[0.356, 0.3052, 0.3358]]])
     return (pc - mean) / std
+
+
+def inverse_normalize_xyz(
+    pc: torch.tensor,
+    mean: list = [0, 0, 0],
+    std: list = [0.356, 0.3052, 0.3358],
+    normalize_mode="full",
+):
+    assert pc.shape[-1] == 3, "The last dimension of the point cloud should be 3."
+    mean = torch.tensor(mean, device=pc.device).expand_as(pc)
+    std = torch.tensor(std, device=pc.device).expand_as(pc)
+    return pc * std + mean
 
 
 # code is copied from MAE
@@ -454,7 +485,8 @@ def point_to_spherical(pc):
     z = pc[..., 2]
 
     # Compute radius
-    radius = torch.sqrt(x**2 + y**2 + z**2)
+    radius = torch.sqrt(torch.sum(pc**2, dim=-1) + 1e-7)
+    
 
     # Avoid division by zero by adding a small epsilon
     epsilon = 1e-8
@@ -468,13 +500,12 @@ def point_to_spherical(pc):
 
     # Handle points with zero radius (origin)
     polar_angle[radius == 0] = 0.0  # Set phi to 0 for origin
-    azimuth[radius == 0] = 0.0      # Set theta to 0 for origin
+    azimuth[radius == 0] = 0.0  # Set theta to 0 for origin
 
     # Combine into a single tensor
     spherical_coordinates = torch.stack((radius, azimuth, polar_angle), dim=-1)
 
     return spherical_coordinates
-
 
 
 def spherical_to_point(spherical_coordinates):
@@ -607,24 +638,98 @@ def point_5D_to_xyz(pc_5d):
 def normalize_5D(
     pc,
     normalize_mode: str = "none",
-    mean: list = [0.5302363038063049, 0, 0, 0, 0],
-    std: list = [0.22668714821338654, 1, 1, 1, 1],
+    mean: list = [
+        0.5302362442016602,
+        0.008457111194729805,
+        -0.0002034295175690204,
+        0.7485858798027039,
+        0.005146338604390621,
+    ],
+    std: list = [
+        0.2266872227191925,
+        0.6612724661827087,
+        0.7500981092453003,
+        0.2791619598865509,
+        0.6013826727867126,
+    ],
 ):
+    """
+    Normalize a 5D point cloud based on the specified mode.
+
+    Args:
+        pc (torch.Tensor): Input point cloud.
+        normalize_mode (str): Mode of normalization ("none", "radius", "rotation", "full").
+        mean (list): Mean values for normalization.
+        std (list): Standard deviation values for normalization.
+
+    Returns:
+        torch.Tensor: Normalized point cloud.
+    """
+
+    def normalize(pc, mean, std):
+        mean_tensor = torch.tensor([mean], device=pc.device)
+        std_tensor = torch.tensor([std], device=pc.device)
+        return (pc - mean_tensor) / std_tensor
+
     if normalize_mode == "none":
         return pc
+    elif normalize_mode == "radius":
+        return normalize(pc, [mean[0], 0, 0, 0, 0], [std[0], 1, 1, 1, 1])
+    elif normalize_mode == "rotation":
+        return normalize(pc, [0, *mean[1:]], [1, *std[1:]])
+    elif normalize_mode == "full":
+        return normalize(pc, mean, std)
     else:
         raise ValueError("Invalid normalization mode.")
-    
+
+
 def inverse_normalize_5D(
     pc,
     normalize_mode: str = "none",
-    mean: list = [0.5302363038063049, 0, 0, 0, 0],
-    std: list = [0.22668714821338654, 1, 1, 1, 1],
+    mean: list = [
+        0.5302362442016602,
+        0.008457111194729805,
+        -0.0002034295175690204,
+        0.7485858798027039,
+        0.005146338604390621,
+    ],
+    std: list = [
+        0.2266872227191925,
+        0.6612724661827087,
+        0.7500981092453003,
+        0.2791619598865509,
+        0.6013826727867126,
+    ],
 ):
+    """
+    Inverse normalize a 5D point cloud based on the specified mode.
+
+    Args:
+        pc (torch.Tensor): Input normalized point cloud.
+        normalize_mode (str): Mode of normalization ("none", "radius", "rotation", "full").
+        mean (list): Mean values for inverse normalization.
+        std (list): Standard deviation values for inverse normalization.
+
+    Returns:
+        torch.Tensor: Inverse normalized point cloud.
+    """
+
+    def inverse_normalize(pc, mean, std):
+        mean_tensor = torch.tensor([mean], device=pc.device)
+        std_tensor = torch.tensor([std], device=pc.device)
+        return pc * std_tensor + mean_tensor
+
     if normalize_mode == "none":
         return pc
+    elif normalize_mode == "radius":
+        return inverse_normalize(pc, [mean[0], 0, 0, 0, 0], [std[0], 1, 1, 1, 1])
+    elif normalize_mode == "rotation":
+        return inverse_normalize(pc, [0, *mean[1:]], [1, *std[1:]])
+    elif normalize_mode == "full":
+        return inverse_normalize(pc, mean, std)
     else:
         raise ValueError("Invalid normalization mode.")
+
 
 def chamfer_loss_5D(source, target):
     """
@@ -646,16 +751,18 @@ def chamfer_loss_5D(source, target):
     r_t, sin_theta_t, cos_theta_t, sin_phi_t, cos_phi_t = torch.split(target, 1, dim=-1)
 
     # Compute pairwise distances for radius
-    radius_dist = (r_s - r_t.transpose(1, 2))**2  # Shape: (B, N, M)
+    radius_dist = (r_s - r_t.transpose(1, 2)) ** 2  # Shape: (B, N, M)
 
     # Compute pairwise distances for angles
-    sin_theta_dist = (sin_theta_s - sin_theta_t.transpose(1, 2))**2
-    cos_theta_dist = (cos_theta_s - cos_theta_t.transpose(1, 2))**2
-    sin_phi_dist = (sin_phi_s - sin_phi_t.transpose(1, 2))**2
-    cos_phi_dist = (cos_phi_s - cos_phi_t.transpose(1, 2))**2
+    sin_theta_dist = (sin_theta_s - sin_theta_t.transpose(1, 2)) ** 2
+    cos_theta_dist = (cos_theta_s - cos_theta_t.transpose(1, 2)) ** 2
+    sin_phi_dist = (sin_phi_s - sin_phi_t.transpose(1, 2)) ** 2
+    cos_phi_dist = (cos_phi_s - cos_phi_t.transpose(1, 2)) ** 2
 
     # Total angular distance
-    angular_dist = sin_theta_dist + cos_theta_dist + sin_phi_dist + cos_phi_dist  # (B, N, M)
+    angular_dist = (
+        sin_theta_dist + cos_theta_dist + sin_phi_dist + cos_phi_dist
+    )  # (B, N, M)
 
     # Total distance in 5D space
     total_dist = radius_dist + angular_dist  # (B, N, M)
@@ -848,130 +955,6 @@ def chamfer_loss_7d(p, q, weight_radius=1.0, weight_rotation=1.0):
     return loss
 
 
-def normalize_7D_radius(
-    pc, mean: float = 0.5302363038063049, std: float = 0.22668714821338654
-):
-    mean_radius = torch.tensor([[[mean, 0, 0, 0, 0, 0, 0]]], device=pc.device)
-    std_radius = torch.tensor([[[std, 1, 1, 1, 1, 1, 1]]], device=pc.device)
-
-    pc_7d_normed = (pc - mean_radius) / std_radius
-    return pc_7d_normed
-
-
-def inverse_normalize_7D_radius(
-    pc_7d_normed, mean: float = 0.5302363038063049, std: float = 0.22668714821338654
-):
-    mean_radius = torch.tensor([[[mean, 0, 0, 0, 0, 0, 0]]], device=pc_7d_normed.device)
-    std_radius = torch.tensor([[[std, 1, 1, 1, 1, 1, 1]]], device=pc_7d_normed.device)
-
-    pc_7d_unnormed = pc_7d_normed * std_radius + mean_radius
-    return pc_7d_unnormed
-
-
-def normalize_7D_rotation(
-    pc,
-    mean: list = [
-        -0.00013076931645628065,
-        -0.008457111194729805,
-        0.00080042117042467,
-        0.0010340140433982015,
-        -0.00020342960488051176,
-        0.022919561713933945,
-    ],
-    std: list = [
-        0.6049997806549072,
-        0.6612724661827087,
-        0.4434205889701843,
-        0.521811306476593,
-        0.7500981092453003,
-        0.4056345522403717,
-    ],
-):
-    mean_rotation = torch.tensor([[[0, *mean]]], device=pc.device)
-    std_rotation = torch.tensor([[[1, *std]]], device=pc.device)
-
-    pc_7d_normed = (pc - mean_rotation) / std_rotation
-    return pc_7d_normed
-
-
-def inverse_normalize_7D_rotation(
-    pc_7d_normed,
-    mean: list = [
-        -0.00013076931645628065,
-        -0.008457111194729805,
-        0.00080042117042467,
-        0.0010340140433982015,
-        -0.00020342960488051176,
-        0.022919561713933945,
-    ],
-    std: list = [
-        0.6049997806549072,
-        0.6612724661827087,
-        0.4434205889701843,
-        0.521811306476593,
-        0.7500981092453003,
-        0.4056345522403717,
-    ],
-):
-    mean_rotation = torch.tensor([[[0, *mean]]], device=pc_7d_normed.device)
-    std_rotation = torch.tensor([[[1, *std]]], device=pc_7d_normed.device)
-
-    pc_7d_unnormed = pc_7d_normed * std_rotation + mean_rotation
-    return pc_7d_unnormed
-
-
-def normalize_7D_full(
-    pc,
-    mean: list = [
-        0.5302363038063049,
-        -0.00013076931645628065,
-        -0.008457111194729805,
-        0.00080042117042467,
-        0.0010340140433982015,
-        -0.00020342960488051176,
-        0.022919561713933945,
-    ],
-    std: list = [
-        0.22668714821338654,
-        0.6049997806549072,
-        0.6612724661827087,
-        0.4434205889701843,
-        0.521811306476593,
-        0.7500981092453003,
-        0.4056345522403717,
-    ],
-):
-    pc_7d_normed = normalize_7D_radius(pc, mean[0], std[0])
-    pc_7d_normed = normalize_7D_rotation(pc_7d_normed, mean[1:], std[1:])
-    return pc_7d_normed
-
-
-def inverse_normalize_7D_full(
-    pc_7d_normed,
-    mean: list = [
-        0.5302363038063049,
-        -0.00013076931645628065,
-        -0.008457111194729805,
-        0.00080042117042467,
-        0.0010340140433982015,
-        -0.00020342960488051176,
-        0.022919561713933945,
-    ],
-    std: list = [
-        0.22668714821338654,
-        0.6049997806549072,
-        0.6612724661827087,
-        0.4434205889701843,
-        0.521811306476593,
-        0.7500981092453003,
-        0.4056345522403717,
-    ],
-):
-    pc_7d_unnormed = inverse_normalize_7D_rotation(pc_7d_normed, mean[1:], std[1:])
-    pc_7d_unnormed = inverse_normalize_7D_radius(pc_7d_unnormed, mean[0], std[0])
-    return pc_7d_unnormed
-
-
 def normalize_7D(
     pc,
     normalize_mode="none",
@@ -994,12 +977,30 @@ def normalize_7D(
         0.4056345522403717,
     ],
 ):
+    """
+    Normalize a 7D point cloud representation based on the specified mode.
+
+    Args:
+        pc (torch.Tensor): Input point cloud.
+        normalize_mode (str): Mode of normalization ("none", "radius", "rotation", "full").
+        mean (list): Mean values for normalization.
+        std (list): Standard deviation values for normalization.
+
+    Returns:
+        torch.Tensor: Normalized point cloud.
+    """
+
+    def normalize(pc, mean, std):
+        mean_tensor = torch.tensor([[[*mean]]], device=pc.device)
+        std_tensor = torch.tensor([[[*std]]], device=pc.device)
+        return (pc - mean_tensor) / std_tensor
+
     if normalize_mode == "full":
-        return normalize_7D_full(pc, mean, std)
+        return normalize(pc, mean, std)
     elif normalize_mode == "radius":
-        return normalize_7D_radius(pc, mean[0], std[0])
+        return normalize(pc, [mean[0], 0, 0, 0, 0, 0, 0], [std[0], 1, 1, 1, 1, 1, 1])
     elif normalize_mode == "rotation":
-        return normalize_7D_rotation(pc, mean[1:], std[1:])
+        return normalize(pc, [0, *mean[1:]], [1, *std[1:]])
     elif normalize_mode == "none":
         return pc
     else:
@@ -1007,7 +1008,7 @@ def normalize_7D(
 
 
 def inverse_normalize_7D(
-    pc_7d_normed,
+    pc,
     normalize_mode="none",
     mean: list = [
         0.5302363038063049,
@@ -1028,13 +1029,33 @@ def inverse_normalize_7D(
         0.4056345522403717,
     ],
 ):
+    """
+    Inverse normalize a 7D point cloud representation based on the specified mode.
+
+    Args:
+        pc (torch.Tensor): Input normalized point cloud.
+        normalize_mode (str): Mode of normalization ("none", "radius", "rotation", "full").
+        mean (list): Mean values for normalization.
+        std (list): Standard deviation values for normalization.
+
+    Returns:
+        torch.Tensor: Inverse normalized point cloud.
+    """
+
+    def inverse_normalize(pc, mean, std):
+        mean_tensor = torch.tensor([[[*mean]]], device=pc.device)
+        std_tensor = torch.tensor([[[*std]]], device=pc.device)
+        return pc * std_tensor + mean_tensor
+
     if normalize_mode == "full":
-        return inverse_normalize_7D_full(pc_7d_normed, mean, std)
+        return inverse_normalize(pc, mean, std)
     elif normalize_mode == "radius":
-        return inverse_normalize_7D_radius(pc_7d_normed, mean[0], std[0])
+        return inverse_normalize(
+            pc, [mean[0], 0, 0, 0, 0, 0, 0], [std[0], 1, 1, 1, 1, 1, 1]
+        )
     elif normalize_mode == "rotation":
-        return inverse_normalize_7D_rotation(pc_7d_normed, mean[1:], std[1:])
+        return inverse_normalize(pc, [0, *mean[1:]], [1, *std[1:]])
     elif normalize_mode == "none":
-        return pc_7d_normed
+        return pc
     else:
         raise ValueError("Invalid normalization mode.")

@@ -12,6 +12,8 @@ from sklearn.svm import LinearSVC
 import numpy as np
 from torchvision import transforms
 from datasets import data_transforms
+from easydict import EasyDict
+
 # from pointnet2_ops import pointnet2_utils
 
 train_transforms = transforms.Compose(
@@ -67,6 +69,8 @@ def evaluate_svm(train_features, train_labels, test_features, test_labels):
 
 def run_net(args, config, train_writer=None, val_writer=None):
     logger = get_logger(args.log_name)
+
+    config.model["args"] = EasyDict(vars(args))
     # build dataset
     (
         (train_sampler, train_dataloader),

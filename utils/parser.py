@@ -87,6 +87,13 @@ def get_args():
         choices=["random", "fps"],
         help="sampling method",
     )
+    parser.add_argument(
+        "--normalize_mode",
+        type=str,
+        default="rotation",
+        choices=["none", "radius", "full", "rotation"],
+        help="normalize mode",
+    )
 
     args = parser.parse_args()
 

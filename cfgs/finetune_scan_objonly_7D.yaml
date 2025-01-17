@@ -29,7 +29,6 @@ model : {
   group_size: 32,
   num_group: 128,
   encoder_dims: 384,
-  normalize_mode: "radius", # "none" or "radius" or "full", or "rotation"
 }
 
 
