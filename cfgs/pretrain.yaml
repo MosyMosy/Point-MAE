@@ -17,6 +17,10 @@ dataset : {
             others: {subset: 'train', npoints: 1024}},
   val : { _base_: cfgs/dataset_configs/ShapeNet-55.yaml,
             others: {subset: 'test', npoints: 1024}},
+  extra_train_svm: { _base_: cfgs/dataset_configs/ModelNet40.yaml,
+            others: { subset: 'train', npoints: 1024 } },
+  extra_test_svm: { _base_: cfgs/dataset_configs/ModelNet40.yaml,
+            others: { subset: 'test', npoints: 1024 } },
   test : { _base_: cfgs/dataset_configs/ShapeNet-55.yaml,
             others: {subset: 'test', npoints: 1024}}}
 

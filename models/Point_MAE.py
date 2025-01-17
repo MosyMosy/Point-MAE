@@ -353,7 +353,6 @@ class MaskTransformer(nn.Module):
 
         self.norm = nn.LayerNorm(self.trans_dim)
         self.apply(self._init_weights)
-        self.pose_encode_mode = ""
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -441,13 +440,7 @@ class MaskTransformer(nn.Module):
         # mask pos center
         masked_center = center[~bool_masked_pos].reshape(batch_size, -1, 3)
 
-        if self.pose_encode_mode == "polar":
-            pos = misc.compute_polar_pose_embed(embed_dim=C, points=masked_center)
-        elif self.pose_encode_mode == "center_polar":
-            pos = self.pos_embed(masked_center)
-            pos += misc.compute_polar_pose_embed(embed_dim=C, points=masked_center)
-        else:
-            pos = self.pos_embed(masked_center)
+        pos = self.pos_embed(masked_center)
 
         # transformer
         x_vis = self.blocks(x_vis, pos)
@@ -502,7 +495,8 @@ class Point_MAE(nn.Module):
         self.loss = config.loss
         # loss
         self.build_loss_func(self.loss)
-        self.pose_encode_mode = ""
+
+        self.normalize_mode = config["args"].normalize_mode
 
     def build_loss_func(self, loss_type):
         if loss_type == "cdl1":
@@ -513,22 +507,24 @@ class Point_MAE(nn.Module):
             raise NotImplementedError
             # self.loss_func = emd().cuda()
 
-    def forward(self, pts, vis=False, **kwargs):
+    def forward(self, pts, vis=False, noaug=False):
         neighborhood, center = self.group_divider(pts)
 
+        neighborhood = misc.normalize_xyz(
+            neighborhood, normalize_mode=self.normalize_mode
+        )
+        center = misc.normalize_xyz(center, normalize_mode=self.normalize_mode)
+
         x_vis, mask = self.MAE_encoder(neighborhood, center)
+        ################# Ali Agha
+        if noaug:
+            return x_vis
+        #################
+        
         B, _, C = x_vis.shape  # B VIS C
 
         pos_emd_vis = self.decoder_pos_embed(center[~mask]).reshape(B, -1, C)
         pos_emd_mask = self.decoder_pos_embed(center[mask]).reshape(B, -1, C)
-
-        if self.pose_encode_mode in ["polar", "center_polar"]:
-            pos_emd_vis += misc.compute_polar_pose_embed(
-                embed_dim=C, points=center[~mask].reshape(B, -1, 3)
-            )
-            pos_emd_mask += misc.compute_polar_pose_embed(
-                embed_dim=C, points=center[mask].reshape(B, -1, 3)
-            )
 
         _, N, _ = pos_emd_mask.shape
         mask_token = self.mask_token.expand(B, N, -1)
@@ -545,7 +541,7 @@ class Point_MAE(nn.Module):
         )  # B M 1024
 
         gt_points = neighborhood[mask].reshape(B * M, -1, 3)
-        loss1 = self.loss_func(rebuild_points, gt_points)
+        loss1 = self.loss_func(rebuild_points.to(gt_points.dtype), gt_points)
 
         if vis:  # visualization
             vis_points = neighborhood[~mask].reshape(B * (self.num_group - M), -1, 3)
@@ -617,6 +613,7 @@ class PointTransformer(nn.Module):
 
         trunc_normal_(self.cls_token, std=0.02)
         trunc_normal_(self.cls_pos, std=0.02)
+        self.normalize_mode = config["args"].normalize_mode
 
     def build_loss_func(self):
         self.loss_ce = nn.CrossEntropyLoss()
@@ -680,6 +677,11 @@ class PointTransformer(nn.Module):
 
     def forward(self, pts):
         neighborhood, center = self.group_divider(pts)
+        neighborhood = misc.normalize_xyz(
+            neighborhood, normalize_mode=self.normalize_mode
+        )
+        center = misc.normalize_xyz(center, normalize_mode=self.normalize_mode)
+
         group_input_tokens = self.encoder(neighborhood)  # B G N
 
         cls_tokens = self.cls_token.expand(group_input_tokens.size(0), -1, -1)

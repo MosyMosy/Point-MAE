@@ -20,6 +20,7 @@ from pytorch3d.ops import sample_farthest_points
 
 from easydict import EasyDict
 
+
 def add_args_to_easydic_as_object(easydic_obj, args, args_key="args"):
     """
     Add all arguments from args to the EasyDict object as a nested object.
@@ -34,6 +35,7 @@ def add_args_to_easydic_as_object(easydic_obj, args, args_key="args"):
     """
     easydic_obj[args_key] = EasyDict(vars(args))
     return easydic_obj
+
 
 def fps(data, number):
     """
@@ -363,9 +365,11 @@ def normalize_xyz(
     normalize_mode="full",
 ):
     assert pc.shape[-1] == 3, "The last dimension of the point cloud should be 3."
+    if normalize_mode == "none":
+        return pc
+
     mean = torch.tensor(mean, device=pc.device).expand_as(pc)
     std = torch.tensor(std, device=pc.device).expand_as(pc)
-    torch.tensor([[[0.356, 0.3052, 0.3358]]])
     return (pc - mean) / std
 
 
@@ -376,6 +380,9 @@ def inverse_normalize_xyz(
     normalize_mode="full",
 ):
     assert pc.shape[-1] == 3, "The last dimension of the point cloud should be 3."
+    if normalize_mode == "none":
+        return pc
+
     mean = torch.tensor(mean, device=pc.device).expand_as(pc)
     std = torch.tensor(std, device=pc.device).expand_as(pc)
     return pc * std + mean
@@ -486,7 +493,6 @@ def point_to_spherical(pc):
 
     # Compute radius
     radius = torch.sqrt(torch.sum(pc**2, dim=-1) + 1e-7)
-    
 
     # Avoid division by zero by adding a small epsilon
     epsilon = 1e-8
