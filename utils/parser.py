@@ -76,7 +76,7 @@ def get_args():
         "--pose_encode_mode",
         type=str,
         default="center",
-        choices=["center", "polar", "center_polar"],
+        choices=["center", "spherical", "center_spherical"],
         help="pose encode mode",
     )
 

@@ -367,10 +367,12 @@ def normalize_xyz(
     assert pc.shape[-1] == 3, "The last dimension of the point cloud should be 3."
     if normalize_mode == "none":
         return pc
-
-    mean = torch.tensor(mean, device=pc.device).expand_as(pc)
-    std = torch.tensor(std, device=pc.device).expand_as(pc)
-    return (pc - mean) / std
+    elif normalize_mode == "full":
+        mean = torch.tensor(mean, device=pc.device).expand_as(pc)
+        std = torch.tensor(std, device=pc.device).expand_as(pc)
+        return (pc - mean) / std
+    else:
+        raise ValueError("Invalid normalization mode.")
 
 
 def inverse_normalize_xyz(
@@ -382,10 +384,12 @@ def inverse_normalize_xyz(
     assert pc.shape[-1] == 3, "The last dimension of the point cloud should be 3."
     if normalize_mode == "none":
         return pc
-
-    mean = torch.tensor(mean, device=pc.device).expand_as(pc)
-    std = torch.tensor(std, device=pc.device).expand_as(pc)
-    return pc * std + mean
+    elif normalize_mode == "full":
+        mean = torch.tensor(mean, device=pc.device).expand_as(pc)
+        std = torch.tensor(std, device=pc.device).expand_as(pc)
+        return pc * std + mean
+    else:
+        raise ValueError("Invalid normalization mode.")
 
 
 # code is copied from MAE
@@ -440,51 +444,15 @@ def get_3d_sincos_pos_embed(embed_dim, points):
     return pos_embed
 
 
-def compute_polar_coordinates(pc):
+def point_xyz_to_spherical(pc):
     """
-    Convert a batch of 3D points to polar coordinates (radius, azimuth, polar angle).
-
-    Args:
-        point_cloud (torch.Tensor): Tensor of shape (B, N, 3), where
-                                     B is the batch size,
-                                     N is the number of points,
-                                     3 corresponds to (x, y, z) coordinates.
-
-    Returns:
-        torch.Tensor: Polar coordinates tensor of shape (B, N, 3), where
-                      the last dimension represents (radius, azimuth, polar_angle).
-    """
-    # Extract x, y, z coordinates
-    x = pc[..., 0]
-    y = pc[..., 1]
-    z = pc[..., 2]
-
-    # Compute radius
-    radius = torch.sqrt(x**2 + y**2 + z**2)
-
-    # Compute azimuth (theta): atan2(y, x)
-    azimuth = torch.atan2(y, x)
-
-    # Compute polar angle (phi): acos(z / r)
-    polar_angle = torch.acos(
-        torch.clamp(z / radius, min=-1.0, max=1.0)
-    )  # Clamp to avoid numerical issues
-
-    # Combine into a single tensor
-    polar_coordinates = torch.stack((radius, azimuth, polar_angle), dim=-1)
-
-    return polar_coordinates
-
-
-def point_to_spherical(pc):
-    """
-    Convert a batch of 3D points to spherical coordinates (radius, azimuth, polar angle).
+    Convert a batch of 3D points to spherical coordinates (radius, azimuth, spherical angle).
 
     Args:
         pc (torch.Tensor): Tensor of shape (B, N, 3) with (x, y, z) coordinates.
 
     Returns:
-        torch.Tensor: Tensor of shape (B, N, 3) with (radius, azimuth, polar angle).
+        torch.Tensor: Tensor of shape (B, N, 3) with (radius, azimuth, spherical angle).
     """
     # Extract x, y, z coordinates
     x = pc[..., 0]
@@ -501,38 +469,38 @@ def point_to_spherical(pc):
     # Compute azimuth (theta): atan2(y, x)
     azimuth = torch.atan2(y, x)
 
-    # Compute polar angle (phi): acos(z / r)
-    polar_angle = torch.acos(torch.clamp(z / safe_radius, min=-1.0, max=1.0))
+    # Compute spherical angle (phi): acos(z / r)
+    spherical_angle = torch.acos(torch.clamp(z / safe_radius, min=-1.0, max=1.0))
 
     # Handle points with zero radius (origin)
-    polar_angle[radius == 0] = 0.0  # Set phi to 0 for origin
+    spherical_angle[radius == 0] = 0.0  # Set phi to 0 for origin
     azimuth[radius == 0] = 0.0  # Set theta to 0 for origin
 
     # Combine into a single tensor
-    spherical_coordinates = torch.stack((radius, azimuth, polar_angle), dim=-1)
+    spherical_coordinates = torch.stack((radius, azimuth, spherical_angle), dim=-1)
 
     return spherical_coordinates
 
 
-def spherical_to_point(spherical_coordinates):
+def point_spherical_to_xyz(spherical_coordinates):
     """
     Convert spherical coordinates to XYZ coordinates.
 
     Args:
-        spherical_coordinates (torch.Tensor): Tensor of shape (B, N, 3) with radius, azimuth, and polar angle.
+        spherical_coordinates (torch.Tensor): Tensor of shape (B, N, 3) with radius, azimuth, and spherical angle.
 
     Returns:
         torch.Tensor: Tensor of shape (B, N, 3) with reconstructed XYZ coordinates.
     """
-    # Extract radius, azimuth, and polar angle
+    # Extract radius, azimuth, and spherical angle
     radius = spherical_coordinates[..., 0]
     azimuth = spherical_coordinates[..., 1]
-    polar_angle = spherical_coordinates[..., 2]
+    spherical_angle = spherical_coordinates[..., 2]
 
-    # Compute direction vector from radius, azimuth, and polar angle
-    x = radius * torch.sin(polar_angle) * torch.cos(azimuth)
-    y = radius * torch.sin(polar_angle) * torch.sin(azimuth)
-    z = radius * torch.cos(polar_angle)
+    # Compute direction vector from radius, azimuth, and spherical angle
+    x = radius * torch.sin(spherical_angle) * torch.cos(azimuth)
+    y = radius * torch.sin(spherical_angle) * torch.sin(azimuth)
+    z = radius * torch.cos(spherical_angle)
 
     # Combine into a single tensor
     xyz = torch.stack((x, y, z), dim=-1)
@@ -540,30 +508,138 @@ def spherical_to_point(spherical_coordinates):
     return xyz
 
 
+def normalize_spherical(
+    pc,
+    normalize_mode: str,
+    mean: list = [0.5302362442016602, 0, 0],
+    std: list = [0.2266872227191925, 1, 1],
+):
+    """
+    Normalize a 5D point cloud based on the specified mode.
+
+    Args:
+        pc (torch.Tensor): Input point cloud.
+        normalize_mode (str): Mode of normalization ("none", "radius", "rotation", "full").
+        mean (list): Mean values for normalization.
+        std (list): Standard deviation values for normalization.
+
+    Returns:
+        torch.Tensor: Normalized point cloud.
+    """
+    if normalize_mode == "none":
+        return pc
+    elif normalize_mode == "radius":
+        mean_tensor = torch.tensor([mean], device=pc.device)
+        std_tensor = torch.tensor([std], device=pc.device)
+        return (pc - mean_tensor) / std_tensor
+    else:
+        raise ValueError("Invalid normalization mode.")
+
+
+def inverse_normalize_spherical(
+    pc,
+    normalize_mode: str,
+    mean: list = [0.5302362442016602, 0, 0],
+    std: list = [0.2266872227191925, 1, 1],
+):
+    """
+    Inverse normalize a 5D point cloud based on the specified mode.
+
+    Args:
+        pc (torch.Tensor): Input normalized point cloud.
+        normalize_mode (str): Mode of normalization ("none", "radius", "rotation", "full").
+        mean (list): Mean values for inverse normalization.
+        std (list): Standard deviation values for inverse normalization.
+
+    Returns:
+        torch.Tensor: Inverse normalized point cloud.
+    """
+    if normalize_mode == "none":
+        return pc
+    elif normalize_mode == "radius":
+        mean_tensor = torch.tensor([mean], device=pc.device)
+        std_tensor = torch.tensor([std], device=pc.device)
+        return pc * std_tensor + mean_tensor
+    else:
+        raise ValueError("Invalid normalization mode.")
+
+
+def chamfer_loss_spherical(source, target):
+    """
+    Compute the Chamfer Loss for spherical coordinates (radius, azimuth, spherical angle).
+
+    Args:
+        source (torch.Tensor): Source spherical coordinates of shape (B, N, 3) with [r, theta, phi].
+        target (torch.Tensor): Target spherical coordinates of shape (B, M, 3) with [r, theta, phi].
+
+    Returns:
+        torch.Tensor: Scalar tensor representing the Chamfer Loss.
+    """
+    # Ensure inputs are valid
+    assert source.shape[-1] == 3, (
+        "Source points should be in spherical space [r, theta, phi]."
+    )
+    assert target.shape[-1] == 3, (
+        "Target points should be in spherical space [r, theta, phi]."
+    )
+
+    # Extract components
+    r_s, theta_s, phi_s = source[..., 0], source[..., 1], source[..., 2]
+    r_t, theta_t, phi_t = target[..., 0], target[..., 1], target[..., 2]
+
+    # Compute pairwise distances for radius
+    radius_dist = (r_s.unsqueeze(-1) - r_t.unsqueeze(-2)) ** 2  # Shape: (B, N, M)
+
+    # Compute angular distance for azimuth (theta)
+    azimuth_diff = torch.atan2(
+        torch.sin(theta_s.unsqueeze(-1) - theta_t.unsqueeze(-2)),
+        torch.cos(theta_s.unsqueeze(-1) - theta_t.unsqueeze(-2)),
+    )  # Shape: (B, N, M)
+    azimuth_dist = azimuth_diff**2
+
+    # Compute angular distance for spherical angle (phi)
+    spherical_diff = torch.atan2(
+        torch.sin(phi_s.unsqueeze(-1) - phi_t.unsqueeze(-2)),
+        torch.cos(phi_s.unsqueeze(-1) - phi_t.unsqueeze(-2)),
+    )  # Shape: (B, N, M)
+    spherical_dist = spherical_diff**2
+
+    # Total pairwise distance
+    total_dist = radius_dist + azimuth_dist + spherical_dist  # (B, N, M)
+
+    # Compute Chamfer Loss
+    src_to_tgt_dist = torch.min(total_dist, dim=-1).values  # (B, N)
+    tgt_to_src_dist = torch.min(total_dist, dim=-2).values  # (B, M)
+
+    loss = src_to_tgt_dist.mean() + tgt_to_src_dist.mean()
+    return loss
+
+
 def spherical_to_continues(spherical_coordinates):
     """
     Convert spherical coordinates to a continues 5D representation.
 
     Args:
-        spherical_coordinates (torch.Tensor): Tensor of shape (B, N, 3) with radius, azimuth, and polar angle.
+        spherical_coordinates (torch.Tensor): Tensor of shape (B, N, 3) with radius, azimuth, and spherical angle.
 
     Returns:
-        torch.Tensor: Tensor of shape (B, N, 5) with radius, sin(azimuth), cos(azimuth), sin(polar angle), cos(polar angle).
+        torch.Tensor: Tensor of shape (B, N, 5) with radius, sin(azimuth), cos(azimuth), sin(spherical angle), cos(spherical angle).
     """
-    # Extract radius, azimuth, and polar angle
+    # Extract radius, azimuth, and spherical angle
     radius = spherical_coordinates[..., 0]
     azimuth = spherical_coordinates[..., 1]
-    polar_angle = spherical_coordinates[..., 2]
+    spherical_angle = spherical_coordinates[..., 2]
 
-    # Compute the sin and cos of the azimuth and polar angle
+    # Compute the sin and cos of the azimuth and spherical angle
     sin_azimuth = torch.sin(azimuth)
     cos_azimuth = torch.cos(azimuth)
-    sin_polar_angle = torch.sin(polar_angle)
-    cos_polar_angle = torch.cos(polar_angle)
+    sin_spherical_angle = torch.sin(spherical_angle)
+    cos_spherical_angle = torch.cos(spherical_angle)
 
     # Combine into a single tensor
     spherical_continues = torch.stack(
-        (radius, sin_azimuth, cos_azimuth, sin_polar_angle, cos_polar_angle), dim=-1
+        (radius, sin_azimuth, cos_azimuth, sin_spherical_angle, cos_spherical_angle),
+        dim=-1,
     )
 
     return spherical_continues
@@ -575,27 +651,27 @@ def continues_to_spherical(spherical_continues):
 
     Args:
         spherical_continues (torch.Tensor): Tensor of shape (B, N, 5) with
-                                            [radius, sin(azimuth), cos(azimuth), sin(polar), cos(polar)].
+                                            [radius, sin(azimuth), cos(azimuth), sin(spherical), cos(spherical)].
 
     Returns:
-        torch.Tensor: Tensor of shape (B, N, 3) with [radius, azimuth, polar angle].
+        torch.Tensor: Tensor of shape (B, N, 3) with [radius, azimuth, spherical angle].
     """
     # Extract components
     radius = spherical_continues[..., 0]  # Radius (B, N)
     sin_azimuth = spherical_continues[..., 1]
     cos_azimuth = spherical_continues[..., 2]
-    sin_polar = spherical_continues[..., 3]
-    cos_polar = spherical_continues[..., 4]
+    sin_spherical = spherical_continues[..., 3]
+    cos_spherical = spherical_continues[..., 4]
 
     # Compute azimuth (theta) using atan2
     azimuth = torch.atan2(sin_azimuth, cos_azimuth)  # (B, N)
 
-    # Compute polar angle (phi) using atan2
-    polar_angle = torch.atan2(sin_polar, cos_polar)  # (B, N)
+    # Compute spherical angle (phi) using atan2
+    spherical_angle = torch.atan2(sin_spherical, cos_spherical)  # (B, N)
 
     # Combine into spherical coordinates
     spherical_coordinates = torch.stack(
-        (radius, azimuth, polar_angle), dim=-1
+        (radius, azimuth, spherical_angle), dim=-1
     )  # (B, N, 3)
 
     return spherical_coordinates
@@ -603,7 +679,7 @@ def continues_to_spherical(spherical_continues):
 
 def point_xyz_to_5D(pc):
     """
-    Convert a 3D point cloud to a 5D representation (radius, sin(azimuth), cos(azimuth), sin(polar), cos(polar)).
+    Convert a 3D point cloud to a 5D representation (radius, sin(azimuth), cos(azimuth), sin(spherical), cos(spherical)).
 
     Args:
         pc (torch.Tensor): Tensor of shape (B, N, 3) with (x, y, z) coordinates.
@@ -616,7 +692,7 @@ def point_xyz_to_5D(pc):
         "The input point cloud should have 3 dimensions (B, N, 3)."
     )
 
-    spherical_coordinates = point_to_spherical(pc)
+    spherical_coordinates = point_xyz_to_spherical(pc)
     spherical_continues = spherical_to_continues(spherical_coordinates)
 
     return spherical_continues
@@ -636,7 +712,7 @@ def point_5D_to_xyz(pc_5d):
 
     spherical_continues = pc_5d
     spherical_coordinates = continues_to_spherical(spherical_continues)
-    xyz = spherical_to_point(spherical_coordinates)
+    xyz = point_spherical_to_xyz(spherical_coordinates)
 
     return xyz
 
